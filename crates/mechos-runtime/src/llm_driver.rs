@@ -20,6 +20,8 @@
 //! // let reply = driver.complete(&messages).unwrap();
 //! ```
 
+use mechos_types::HardwareIntent;
+use schemars::schema_for;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -37,7 +39,7 @@ pub const STABILITY_GUIDELINES: &str = "\
 - If an action fails, try a different approach rather than retrying immediately.
 - Vary your strategy when the previous actions have not produced progress.
 - Avoid issuing the same HardwareIntent consecutively more than 3 times.
-- When stuck, emit an EmergencyStop and reassess the situation before continuing.";
+- When stuck, emit an AskHuman intent to request human guidance before continuing.";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Error type
@@ -78,11 +80,20 @@ pub struct ChatMessage {
 // Internal request / response shapes
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// `response_format` field that enforces structured JSON Schema output.
+#[derive(Serialize)]
+struct ResponseFormat {
+    #[serde(rename = "type")]
+    kind: &'static str,
+    json_schema: serde_json::Value,
+}
+
 #[derive(Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
     messages: &'a [ChatMessage],
     stream: bool,
+    response_format: ResponseFormat,
 }
 
 #[derive(Deserialize)]
@@ -159,10 +170,16 @@ impl LlmDriver {
         }
 
         let url = format!("{}/v1/chat/completions", self.base_url);
+        let schema = serde_json::to_value(schema_for!(HardwareIntent))
+            .unwrap_or(serde_json::Value::Null);
         let body = ChatRequest {
             model: &self.model,
             messages: &augmented,
             stream: false,
+            response_format: ResponseFormat {
+                kind: "json_schema",
+                json_schema: schema,
+            },
         };
 
         let response: ChatResponse = self
@@ -298,5 +315,17 @@ mod tests {
     #[test]
     fn llm_driver_constructed_without_panic() {
         let _driver = LlmDriver::new("http://localhost:11434", "llama3");
+    }
+
+    #[test]
+    fn hardware_intent_schema_is_injected_into_request_body() {
+        use mechos_types::HardwareIntent;
+        use schemars::schema_for;
+        let schema = serde_json::to_value(schema_for!(HardwareIntent)).unwrap();
+        let schema_str = schema.to_string();
+        assert!(schema_str.contains("MoveEndEffector"));
+        assert!(schema_str.contains("AskHuman"));
+        assert!(schema_str.contains("Drive"));
+        assert!(schema_str.contains("TriggerRelay"));
     }
 }

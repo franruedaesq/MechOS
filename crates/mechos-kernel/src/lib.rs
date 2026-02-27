@@ -11,7 +11,7 @@
 //!   any tool or hardware is invoked.
 //! - [`state_verifier`] – [`StateVerifier`][state_verifier::StateVerifier]:
 //!   a rule engine that validates every [`HardwareIntent`][mechos_types::HardwareIntent]
-//!   against registered physical invariants (joint limits, speed caps, etc.)
+//!   against registered physical invariants (workspace bounds, speed caps, etc.)
 //!   and returns a fault if any invariant is violated.
 //! - [`kernel_gate`] – [`KernelGate`][kernel_gate::KernelGate]:
 //!   the single interception point that `mechos-runtime` must pass through
@@ -29,6 +29,6 @@ pub mod watchdog;
 
 pub use capability_manager::CapabilityManager;
 pub use kernel_gate::KernelGate;
-pub use state_verifier::{JointLimitRule, Rule, SpeedCapRule, StateVerifier};
+pub use state_verifier::{EndEffectorWorkspaceRule, Rule, SpeedCapRule, StateVerifier};
 pub use watchdog::{ComponentHealth, Watchdog};
 

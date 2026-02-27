@@ -65,6 +65,24 @@ impl HardwareRegistry {
     pub fn dispatch(&mut self, intent: HardwareIntent) -> Result<(), MechError> {
         match intent {
             // ----------------------------------------------------------------
+            // High-level end-effector move: forward to a registered "end_effector"
+            // actuator.  The HAL `Actuator` trait operates on a single f32 position
+            // value; the Universal Integration Adapter is expected to translate the
+            // full 3-D coordinate (x, y, z) into joint angles *before* this
+            // registry is called, then register the resolved actuator.  Until an
+            // IK adapter is wired in, the registry stores x as the representative
+            // position and reports the full target in any error message.
+            // ----------------------------------------------------------------
+            HardwareIntent::MoveEndEffector { x, y, z } => {
+                self.actuate("end_effector", x).map_err(|_| MechError::HardwareFault {
+                    component: "end_effector".to_string(),
+                    details: format!(
+                        "end_effector actuator not registered (target x={x}, y={y}, z={z})"
+                    ),
+                })
+            }
+
+            // ----------------------------------------------------------------
             // Differential drive: decompose (v, ω) → left/right wheel targets.
             // Assumes a unit wheelbase (track width = 1 m or 1 rad unit).
             // ----------------------------------------------------------------
@@ -80,14 +98,6 @@ impl HardwareRegistry {
             }
 
             // ----------------------------------------------------------------
-            // Single joint position command.
-            // ----------------------------------------------------------------
-            HardwareIntent::ActuateJoint {
-                joint_id,
-                target_angle_rad,
-            } => self.actuate(&joint_id, target_angle_rad),
-
-            // ----------------------------------------------------------------
             // Discrete relay command.
             // ----------------------------------------------------------------
             HardwareIntent::TriggerRelay { relay_id, state } => {
@@ -101,31 +111,11 @@ impl HardwareRegistry {
             }
 
             // ----------------------------------------------------------------
-            // Emergency stop: halt all actuators (hold current position) and
-            // de-energise all relays.
+            // HITL: the AI is requesting human guidance.  At the HAL level
+            // this is a no-op – the intent is surfaced to the Dashboard by
+            // the EventBus upstream; no physical actuator is commanded.
             // ----------------------------------------------------------------
-            HardwareIntent::EmergencyStop => {
-                // Explicitly command every actuator to hold its current position.
-                // In a real driver this translates to a "hold position" signal sent
-                // to the motor controller, preventing it from coasting or drifting.
-                let positions: Vec<(String, f32)> = self
-                    .actuators
-                    .iter()
-                    .map(|(id, act)| (id.clone(), act.position()))
-                    .collect();
-                for (id, pos) in positions {
-                    if let Some(act) = self.actuators.get_mut(&id) {
-                        act.set_position(pos)?;
-                    }
-                }
-                let relay_ids: Vec<String> = self.relays.keys().cloned().collect();
-                for id in relay_ids {
-                    if let Some(relay) = self.relays.get_mut(&id) {
-                        relay.set_state(false)?;
-                    }
-                }
-                Ok(())
-            }
+            HardwareIntent::AskHuman { .. } => Ok(()),
         }
     }
 
@@ -223,19 +213,21 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn dispatch_actuate_joint() {
+    fn dispatch_move_end_effector() {
         let mut registry = HardwareRegistry::new();
-        registry.register_actuator(MockActuator::new("arm_joint_1"));
+        registry.register_actuator(MockActuator::new("end_effector"));
 
         registry
-            .dispatch(HardwareIntent::ActuateJoint {
-                joint_id: "arm_joint_1".to_string(),
-                target_angle_rad: 1.57,
+            .dispatch(HardwareIntent::MoveEndEffector {
+                x: 0.3,
+                y: 0.1,
+                z: 0.5,
             })
             .unwrap();
 
-        let pos = registry.actuators["arm_joint_1"].position();
-        assert!((pos - 1.57).abs() < f32::EPSILON);
+        // x is forwarded as the position to the end_effector actuator
+        let pos = registry.actuators["end_effector"].position();
+        assert!((pos - 0.3).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -287,45 +279,34 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_emergency_stop_de_energises_relays() {
+    fn dispatch_ask_human_is_noop() {
         let mut registry = HardwareRegistry::new();
-        registry.register_relay(MockRelay::new("relay_a"));
-        // Pre-energise the relay.
-        registry
-            .dispatch(HardwareIntent::TriggerRelay {
-                relay_id: "relay_a".to_string(),
-                state: true,
+        // AskHuman does not require any hardware; should always succeed.
+        assert!(registry
+            .dispatch(HardwareIntent::AskHuman {
+                question: "Which direction?".to_string(),
+                context_image_id: None,
             })
-            .unwrap();
-        assert!(registry.relays["relay_a"].state());
-
-        // Emergency stop must de-energise it.
-        registry.dispatch(HardwareIntent::EmergencyStop).unwrap();
-        assert!(!registry.relays["relay_a"].state());
+            .is_ok());
     }
 
     #[test]
-    fn dispatch_emergency_stop_holds_actuator_positions() {
+    fn dispatch_missing_end_effector_returns_error() {
         let mut registry = HardwareRegistry::new();
-        registry.register_actuator(MockActuator::new("arm_joint_1"));
-        registry
-            .dispatch(HardwareIntent::ActuateJoint {
-                joint_id: "arm_joint_1".to_string(),
-                target_angle_rad: 0.5,
-            })
-            .unwrap();
-
-        registry.dispatch(HardwareIntent::EmergencyStop).unwrap();
-        // Position should remain unchanged after emergency stop.
-        assert!((registry.actuators["arm_joint_1"].position() - 0.5).abs() < f32::EPSILON);
+        let result = registry.dispatch(HardwareIntent::MoveEndEffector {
+            x: 0.5,
+            y: 0.0,
+            z: 1.0,
+        });
+        assert!(matches!(result, Err(MechError::HardwareFault { .. })));
     }
 
     #[test]
     fn dispatch_missing_actuator_returns_error() {
         let mut registry = HardwareRegistry::new();
-        let result = registry.dispatch(HardwareIntent::ActuateJoint {
-            joint_id: "nonexistent".to_string(),
-            target_angle_rad: 1.0,
+        let result = registry.dispatch(HardwareIntent::Drive {
+            linear_velocity: 1.0,
+            angular_velocity: 0.0,
         });
         assert!(matches!(result, Err(MechError::HardwareFault { .. })));
     }
@@ -358,17 +339,18 @@ mod tests {
     #[test]
     fn re_registering_actuator_replaces_old_driver() {
         let mut registry = HardwareRegistry::new();
-        registry.register_actuator(MockActuator::new("joint_x"));
+        registry.register_actuator(MockActuator::new("end_effector"));
         registry
-            .dispatch(HardwareIntent::ActuateJoint {
-                joint_id: "joint_x".to_string(),
-                target_angle_rad: 3.0,
+            .dispatch(HardwareIntent::MoveEndEffector {
+                x: 3.0,
+                y: 0.0,
+                z: 0.0,
             })
             .unwrap();
 
         // Re-register a fresh driver with the same id (position resets to 0).
-        registry.register_actuator(MockActuator::new("joint_x"));
-        let pos = registry.actuators["joint_x"].position();
+        registry.register_actuator(MockActuator::new("end_effector"));
+        let pos = registry.actuators["end_effector"].position();
         assert!((pos - 0.0).abs() < f32::EPSILON);
     }
 }

@@ -8,8 +8,8 @@
 //! Two built-in rules are provided:
 //! - [`SpeedCapRule`] – rejects `Drive` commands whose linear or angular
 //!   velocities exceed configured caps.
-//! - [`JointLimitRule`] – rejects `ActuateJoint` commands that would move a
-//!   named joint outside its safe angular range.
+//! - [`EndEffectorWorkspaceRule`] – rejects `MoveEndEffector` commands that
+//!   place the end-effector outside its safe cubic workspace.
 
 use mechos_types::{HardwareIntent, MechError};
 
@@ -127,38 +127,43 @@ impl Rule for SpeedCapRule {
     }
 }
 
-/// Rejects [`HardwareIntent::ActuateJoint`] commands that would move a
-/// specific joint outside its `[min_rad, max_rad]` safe range.
-pub struct JointLimitRule {
-    /// The joint this rule applies to.
-    pub joint_id: String,
-    /// Minimum allowed angle in radians (inclusive).
-    pub min_rad: f32,
-    /// Maximum allowed angle in radians (inclusive).
-    pub max_rad: f32,
+/// Rejects [`HardwareIntent::MoveEndEffector`] commands that would place the
+/// end-effector outside its safe cubic workspace `[min, max]` on each axis.
+pub struct EndEffectorWorkspaceRule {
+    /// Minimum allowed X coordinate (metres).
+    pub min_x: f32,
+    /// Maximum allowed X coordinate (metres).
+    pub max_x: f32,
+    /// Minimum allowed Y coordinate (metres).
+    pub min_y: f32,
+    /// Maximum allowed Y coordinate (metres).
+    pub max_y: f32,
+    /// Minimum allowed Z coordinate (metres).
+    pub min_z: f32,
+    /// Maximum allowed Z coordinate (metres).
+    pub max_z: f32,
 }
 
-impl Rule for JointLimitRule {
+impl Rule for EndEffectorWorkspaceRule {
     fn name(&self) -> &str {
-        "joint_limit"
+        "end_effector_workspace"
     }
 
     fn check(&self, intent: &HardwareIntent) -> Result<(), MechError> {
-        if let HardwareIntent::ActuateJoint {
-            joint_id,
-            target_angle_rad,
-        } = intent
-        {
-            if joint_id == &self.joint_id
-                && (*target_angle_rad < self.min_rad || *target_angle_rad > self.max_rad)
-            {
-                return Err(MechError::HardwareFault {
-                    component: joint_id.clone(),
-                    details: format!(
-                        "target_angle_rad {target_angle_rad} out of [{}, {}]",
-                        self.min_rad, self.max_rad
-                    ),
-                });
+        if let HardwareIntent::MoveEndEffector { x, y, z } = intent {
+            for (axis, val, min, max) in [
+                ("x", x, &self.min_x, &self.max_x),
+                ("y", y, &self.min_y, &self.max_y),
+                ("z", z, &self.min_z, &self.max_z),
+            ] {
+                if *val < *min || *val > *max {
+                    return Err(MechError::HardwareFault {
+                        component: "end_effector".to_string(),
+                        details: format!(
+                            "{axis}={val} out of [{min}, {max}]"
+                        ),
+                    });
+                }
             }
         }
         Ok(())
@@ -179,12 +184,22 @@ mod tests {
         v
     }
 
-    fn joint_verifier(joint_id: &str, min_rad: f32, max_rad: f32) -> StateVerifier {
+    fn workspace_verifier(
+        min_x: f32,
+        max_x: f32,
+        min_y: f32,
+        max_y: f32,
+        min_z: f32,
+        max_z: f32,
+    ) -> StateVerifier {
         let mut v = StateVerifier::new();
-        v.add_rule(Box::new(JointLimitRule {
-            joint_id: joint_id.to_string(),
-            min_rad,
-            max_rad,
+        v.add_rule(Box::new(EndEffectorWorkspaceRule {
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+            min_z,
+            max_z,
         }));
         v
     }
@@ -250,80 +265,73 @@ mod tests {
     }
 
     #[test]
-    fn speed_cap_does_not_apply_to_joint_intents() {
+    fn speed_cap_does_not_apply_to_end_effector_intents() {
         let v = speed_verifier(1.0, 1.0);
-        // ActuateJoint is irrelevant to the speed cap rule.
+        // MoveEndEffector is irrelevant to the speed cap rule.
         assert!(v
-            .verify(&HardwareIntent::ActuateJoint {
-                joint_id: "arm".into(),
-                target_angle_rad: 999.0
+            .verify(&HardwareIntent::MoveEndEffector {
+                x: 999.0,
+                y: 999.0,
+                z: 999.0,
             })
             .is_ok());
     }
 
-    // ------------------------------------------------------------------ JointLimitRule
+    // ------------------------------------------------------------------ EndEffectorWorkspaceRule
 
     #[test]
-    fn joint_within_limits_passes() {
-        let v = joint_verifier("arm_joint_1", -1.57, 1.57);
+    fn end_effector_within_workspace_passes() {
+        let v = workspace_verifier(-1.0, 1.0, -1.0, 1.0, 0.0, 2.0);
         assert!(v
-            .verify(&HardwareIntent::ActuateJoint {
-                joint_id: "arm_joint_1".into(),
-                target_angle_rad: 0.0
-            })
-            .is_ok());
-    }
-
-    #[test]
-    fn joint_at_limit_boundary_passes() {
-        let v = joint_verifier("arm_joint_1", -1.57, 1.57);
-        assert!(v
-            .verify(&HardwareIntent::ActuateJoint {
-                joint_id: "arm_joint_1".into(),
-                target_angle_rad: 1.57
+            .verify(&HardwareIntent::MoveEndEffector {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
             })
             .is_ok());
     }
 
     #[test]
-    fn joint_over_max_rejected() {
-        let v = joint_verifier("arm_joint_1", -1.57, 1.57);
+    fn end_effector_at_workspace_boundary_passes() {
+        let v = workspace_verifier(-1.0, 1.0, -1.0, 1.0, 0.0, 2.0);
+        assert!(v
+            .verify(&HardwareIntent::MoveEndEffector {
+                x: 1.0,
+                y: -1.0,
+                z: 2.0,
+            })
+            .is_ok());
+    }
+
+    #[test]
+    fn end_effector_x_over_max_rejected() {
+        let v = workspace_verifier(-1.0, 1.0, -1.0, 1.0, 0.0, 2.0);
         assert!(matches!(
-            v.verify(&HardwareIntent::ActuateJoint {
-                joint_id: "arm_joint_1".into(),
-                target_angle_rad: 2.0
+            v.verify(&HardwareIntent::MoveEndEffector {
+                x: 1.5,
+                y: 0.0,
+                z: 1.0,
             }),
             Err(MechError::HardwareFault { .. })
         ));
     }
 
     #[test]
-    fn joint_under_min_rejected() {
-        let v = joint_verifier("arm_joint_1", -1.57, 1.57);
+    fn end_effector_z_below_min_rejected() {
+        let v = workspace_verifier(-1.0, 1.0, -1.0, 1.0, 0.0, 2.0);
         assert!(matches!(
-            v.verify(&HardwareIntent::ActuateJoint {
-                joint_id: "arm_joint_1".into(),
-                target_angle_rad: -2.0
+            v.verify(&HardwareIntent::MoveEndEffector {
+                x: 0.0,
+                y: 0.0,
+                z: -0.1,
             }),
             Err(MechError::HardwareFault { .. })
         ));
     }
 
     #[test]
-    fn joint_rule_does_not_apply_to_other_joints() {
-        let v = joint_verifier("arm_joint_1", -1.57, 1.57);
-        // arm_joint_2 has no rule, so any angle is fine.
-        assert!(v
-            .verify(&HardwareIntent::ActuateJoint {
-                joint_id: "arm_joint_2".into(),
-                target_angle_rad: 999.0
-            })
-            .is_ok());
-    }
-
-    #[test]
-    fn joint_rule_does_not_apply_to_drive_intents() {
-        let v = joint_verifier("arm_joint_1", -1.57, 1.57);
+    fn workspace_rule_does_not_apply_to_drive_intents() {
+        let v = workspace_verifier(-1.0, 1.0, -1.0, 1.0, 0.0, 2.0);
         assert!(v
             .verify(&HardwareIntent::Drive {
                 linear_velocity: 0.0,
@@ -341,13 +349,16 @@ mod tests {
             max_linear: 1.0,
             max_angular: 1.0,
         }));
-        v.add_rule(Box::new(JointLimitRule {
-            joint_id: "arm_joint_1".into(),
-            min_rad: -1.0,
-            max_rad: 1.0,
+        v.add_rule(Box::new(EndEffectorWorkspaceRule {
+            min_x: -1.0,
+            max_x: 1.0,
+            min_y: -1.0,
+            max_y: 1.0,
+            min_z: 0.0,
+            max_z: 2.0,
         }));
 
-        // Speed cap fires first even though the joint rule is also registered.
+        // Speed cap fires first even though the workspace rule is also registered.
         let result = v.verify(&HardwareIntent::Drive {
             linear_velocity: 5.0,
             angular_velocity: 0.0,
@@ -358,7 +369,12 @@ mod tests {
     #[test]
     fn empty_verifier_always_passes() {
         let v = StateVerifier::new();
-        assert!(v.verify(&HardwareIntent::EmergencyStop).is_ok());
+        assert!(v
+            .verify(&HardwareIntent::AskHuman {
+                question: "Help?".to_string(),
+                context_image_id: None,
+            })
+            .is_ok());
         assert!(v
             .verify(&HardwareIntent::Drive {
                 linear_velocity: 999.0,
@@ -368,9 +384,14 @@ mod tests {
     }
 
     #[test]
-    fn emergency_stop_passes_all_rules() {
-        let v = speed_verifier(0.0, 0.0); // zero cap – nothing allowed
-        // EmergencyStop is special and must always pass.
-        assert!(v.verify(&HardwareIntent::EmergencyStop).is_ok());
+    fn ask_human_passes_all_rules() {
+        let v = speed_verifier(0.0, 0.0); // zero cap – nothing allowed for Drive
+        // AskHuman is not a physical motion and must always pass.
+        assert!(v
+            .verify(&HardwareIntent::AskHuman {
+                question: "What should I do?".to_string(),
+                context_image_id: None,
+            })
+            .is_ok());
     }
 }

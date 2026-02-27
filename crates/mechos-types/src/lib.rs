@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -18,23 +19,24 @@ pub enum Capability {
 
 /// Strict definition of physical actions the LLM is allowed to request.
 /// `mechos-hal` parses these intents and translates them into motor currents.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "action", content = "payload")]
 pub enum HardwareIntent {
+    /// High-level: move the gripper/end-effector to a 3D world coordinate.
+    /// The Universal Integration Adapter resolves the Inverse Kinematics.
+    MoveEndEffector { x: f32, y: f32, z: f32 },
     /// Standard differential drive command
     Drive {
         linear_velocity: f32,
         angular_velocity: f32,
     },
-    /// Command to move a specific joint to a target angle
-    ActuateJoint {
-        joint_id: String,
-        target_angle_rad: f32,
-    },
     /// Command to trigger a discrete hardware action
     TriggerRelay { relay_id: String, state: bool },
-    /// Emergency stop - cuts power to all actuators
-    EmergencyStop,
+    /// HITL: the AI is uncertain and requests human instruction via the Dashboard.
+    AskHuman {
+        question: String,
+        context_image_id: Option<String>,
+    },
 }
 
 /// Unified event wrapper for the headless event bus.
@@ -141,11 +143,70 @@ mod tests {
     }
 
     #[test]
-    fn hardware_intent_emergency_stop_roundtrip() {
-        let intent = HardwareIntent::EmergencyStop;
+    fn hardware_intent_move_end_effector_roundtrip() {
+        let intent = HardwareIntent::MoveEndEffector {
+            x: 0.5,
+            y: -0.1,
+            z: 0.3,
+        };
         let json = serde_json::to_string(&intent).unwrap();
         let back: HardwareIntent = serde_json::from_str(&json).unwrap();
-        assert!(matches!(back, HardwareIntent::EmergencyStop));
+        match back {
+            HardwareIntent::MoveEndEffector { x, y, z } => {
+                assert!((x - 0.5).abs() < f32::EPSILON);
+                assert!((y - (-0.1)).abs() < f32::EPSILON);
+                assert!((z - 0.3).abs() < f32::EPSILON);
+            }
+            _ => panic!("unexpected variant"),
+        }
+    }
+
+    #[test]
+    fn hardware_intent_ask_human_roundtrip() {
+        let intent = HardwareIntent::AskHuman {
+            question: "Which shelf should I pick from?".to_string(),
+            context_image_id: Some("frame_042".to_string()),
+        };
+        let json = serde_json::to_string(&intent).unwrap();
+        let back: HardwareIntent = serde_json::from_str(&json).unwrap();
+        match back {
+            HardwareIntent::AskHuman {
+                question,
+                context_image_id,
+            } => {
+                assert_eq!(question, "Which shelf should I pick from?");
+                assert_eq!(context_image_id.as_deref(), Some("frame_042"));
+            }
+            _ => panic!("unexpected variant"),
+        }
+    }
+
+    #[test]
+    fn hardware_intent_ask_human_no_image_roundtrip() {
+        let intent = HardwareIntent::AskHuman {
+            question: "Am I clear to proceed?".to_string(),
+            context_image_id: None,
+        };
+        let json = serde_json::to_string(&intent).unwrap();
+        let back: HardwareIntent = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            back,
+            HardwareIntent::AskHuman {
+                context_image_id: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn hardware_intent_json_schema_is_derivable() {
+        use schemars::schema_for;
+        let schema = schema_for!(HardwareIntent);
+        let json = serde_json::to_string(&schema).unwrap();
+        assert!(json.contains("MoveEndEffector"));
+        assert!(json.contains("Drive"));
+        assert!(json.contains("TriggerRelay"));
+        assert!(json.contains("AskHuman"));
     }
 
     #[test]
