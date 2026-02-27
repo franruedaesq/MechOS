@@ -133,6 +133,11 @@ pub struct AgentLoop {
     override_active: Arc<AtomicBool>,
     /// Wall-clock time of the most recent manual-override drive command.
     override_last_seen: Option<Instant>,
+    // ── Cockpit pause/resume state ────────────────────────────────────────────
+    /// `true` when the Cockpit operator has explicitly paused the autonomous
+    /// OODA cycle via the mode-toggle button.  Independent of the joystick
+    /// override interlock.
+    paused: bool,
     /// Non-blocking bus subscriber used to pick up human responses and
     /// dashboard-override events that arrive between ticks.
     bus_rx: broadcast::Receiver<Event>,
@@ -191,6 +196,7 @@ impl AgentLoop {
             pending_human_response: None,
             override_active,
             override_last_seen: None,
+            paused: false,
             bus_rx,
         }
     }
@@ -269,6 +275,24 @@ impl AgentLoop {
     }
 
     // -------------------------------------------------------------------------
+    // Cockpit pause/resume API
+    // -------------------------------------------------------------------------
+
+    /// Pause or resume the autonomous OODA cycle via the Cockpit mode-toggle.
+    ///
+    /// When `paused` is `true` subsequent calls to [`tick`][Self::tick] return
+    /// early without invoking the LLM.  This is independent of the 10-second
+    /// joystick manual-override interlock.
+    pub fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
+    }
+
+    /// `true` if the Cockpit operator has explicitly paused the autonomous loop.
+    pub fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    // -------------------------------------------------------------------------
     // OODA tick
     // -------------------------------------------------------------------------
 
@@ -277,6 +301,7 @@ impl AgentLoop {
     /// # Errors
     ///
     /// Returns `Err` if:
+    /// - The Cockpit operator has paused the loop via the mode-toggle.
     /// - A manual override is active (AI suspended for up to 10 s).
     /// - The loop is waiting for a human response to an `AskHuman` intent.
     /// - The LLM response cannot be parsed as a [`HardwareIntent`].
@@ -287,6 +312,14 @@ impl AgentLoop {
         // Pick up any human responses or override notifications that arrived
         // between ticks without blocking.
         self.drain_bus_events();
+
+        // ── Cockpit pause guard ────────────────────────────────────────────────
+        if self.paused {
+            return Err(MechError::HardwareFault {
+                component: "agent_loop".to_string(),
+                details: "agent loop paused by operator".to_string(),
+            });
+        }
 
         // ── Manual override guard ──────────────────────────────────────────────
         if self.override_active.load(Ordering::Acquire) {
@@ -443,6 +476,8 @@ impl AgentLoop {
     ///   tick can inject it into the LLM context.
     /// * `source: "mechos-middleware::dashboard_override"` – extracts the
     ///   Twist velocities and arms the manual-override interlock.
+    /// * [`EventPayload::AgentModeToggle`] – sets or clears the Cockpit
+    ///   pause flag.
     fn drain_bus_events(&mut self) {
         loop {
             match self.bus_rx.try_recv() {
@@ -451,6 +486,9 @@ impl AgentLoop {
                         EventPayload::HumanResponse(response) => {
                             self.pending_human_response = Some(response.clone());
                             self.waiting_for_human = false;
+                        }
+                        EventPayload::AgentModeToggle { paused } => {
+                            self.paused = *paused;
                         }
                         EventPayload::AgentThought(json_str)
                             if event.source
@@ -716,5 +754,72 @@ mod tests {
         let _ = agent.bus.publish(event);
         agent.drain_bus_events();
         assert!(agent.is_override_active());
+    }
+
+    // ── Cockpit pause/resume tests ────────────────────────────────────────────
+
+    #[test]
+    fn initial_state_not_paused() {
+        let agent = default_agent();
+        assert!(!agent.is_paused());
+    }
+
+    #[test]
+    fn set_paused_true_pauses_loop() {
+        let mut agent = default_agent();
+        agent.set_paused(true);
+        assert!(agent.is_paused());
+    }
+
+    #[test]
+    fn set_paused_false_resumes_loop() {
+        let mut agent = default_agent();
+        agent.set_paused(true);
+        agent.set_paused(false);
+        assert!(!agent.is_paused());
+    }
+
+    #[test]
+    fn tick_returns_hardware_fault_when_paused() {
+        let mut agent = default_agent();
+        agent.set_paused(true);
+        let result = agent.tick(0.1);
+        assert!(
+            matches!(
+                &result,
+                Err(MechError::HardwareFault { component, details })
+                    if component == "agent_loop" && details.contains("paused")
+            ),
+            "expected paused HardwareFault, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn drain_bus_events_picks_up_agent_mode_toggle_pause() {
+        let mut agent = default_agent();
+        let event = Event {
+            id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            source: "mechos-cockpit::server".to_string(),
+            payload: EventPayload::AgentModeToggle { paused: true },
+        };
+        let _ = agent.bus.publish(event);
+        agent.drain_bus_events();
+        assert!(agent.is_paused());
+    }
+
+    #[test]
+    fn drain_bus_events_picks_up_agent_mode_toggle_resume() {
+        let mut agent = default_agent();
+        agent.set_paused(true);
+        let event = Event {
+            id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            source: "mechos-cockpit::server".to_string(),
+            payload: EventPayload::AgentModeToggle { paused: false },
+        };
+        let _ = agent.bus.publish(event);
+        agent.drain_bus_events();
+        assert!(!agent.is_paused());
     }
 }

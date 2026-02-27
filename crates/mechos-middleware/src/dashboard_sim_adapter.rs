@@ -52,13 +52,17 @@ impl DashboardSimAdapter {
     /// dashboard's `/sim_scan` topic and publish it as a
     /// [`EventPayload::Telemetry`] event on the internal bus.
     ///
+    /// When `ranges` is non-empty, an additional
+    /// [`EventPayload::LidarScan`] event is also published so that the Cockpit
+    /// Sensory Visualizer can render the raw scan points.
+    ///
     /// `_ranges` contains virtual distances (metres) produced by the
-    /// dashboard's Three.js raycasts.  Full range processing (Octree collision
-    /// map updates) is pending future integration; only the odometry fields
-    /// are used to build the telemetry snapshot.
+    /// dashboard's Three.js raycasts.  The scan uses the ROS-standard field of
+    /// view: `angle_min = -π/2`, `angle_increment = π / (N − 1)` where `N` is
+    /// the number of range samples.
     pub fn ingest_sim_scan(
         &self,
-        _ranges: &[f32],
+        ranges: &[f32],
         position_x: f32,
         position_y: f32,
         heading_rad: f32,
@@ -75,7 +79,29 @@ impl DashboardSimAdapter {
                 battery_percent,
             }),
         };
-        self.bus.publish(event)
+        let n = self.bus.publish(event)?;
+
+        if !ranges.is_empty() {
+            let n_samples = ranges.len() as f32;
+            let angle_increment_rad = if n_samples > 1.0 {
+                std::f32::consts::PI / (n_samples - 1.0)
+            } else {
+                0.0
+            };
+            let scan_event = Event {
+                id: Uuid::new_v4(),
+                timestamp: Utc::now(),
+                source: "mechos-middleware::dashboard/sim_scan/lidar".to_string(),
+                payload: EventPayload::LidarScan {
+                    ranges: ranges.to_vec(),
+                    angle_min_rad: -std::f32::consts::FRAC_PI_2,
+                    angle_increment_rad,
+                },
+            };
+            let _ = self.bus.publish(scan_event);
+        }
+
+        Ok(n)
     }
 
     /// Ingest a human operator's response to an [`HardwareIntent::AskHuman`]

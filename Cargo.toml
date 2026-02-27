@@ -8,5 +8,6 @@ members = [
     "crates/mechos-kernel",
     "crates/mechos-runtime",
     "crates/mechos-memory",
-    "crates/mechos-cli"
+    "crates/mechos-cli",
+    "crates/mechos-cockpit"
 ]
