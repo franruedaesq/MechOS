@@ -146,6 +146,12 @@ pub enum MechError {
 
     #[error("Middleware Serialization Error: {0}")]
     Serialization(String),
+
+    #[error("Channel Error: {0}")]
+    Channel(String),
+
+    #[error("Parsing Error: {0}")]
+    Parsing(String),
 }
 
 #[cfg(test)]
