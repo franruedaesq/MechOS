@@ -231,7 +231,7 @@ impl OctreeNode {
         } else {
             self.children
                 .as_ref()
-                .unwrap()
+                .expect("non-leaf node must have children")
                 .iter()
                 .map(|c| c.count())
                 .sum()
@@ -250,7 +250,12 @@ impl OctreeNode {
                 self.subdivide(max_depth, depth);
             }
         } else {
-            for child in self.children.as_mut().unwrap().iter_mut() {
+            for child in self
+                .children
+                .as_mut()
+                .expect("non-leaf node must have children")
+                .iter_mut()
+            {
                 if child.bounds.contains_point(point) {
                     child.insert(point, max_depth, depth + 1);
                     return;
@@ -268,7 +273,7 @@ impl OctreeNode {
         } else {
             self.children
                 .as_ref()
-                .unwrap()
+                .expect("non-leaf node must have children")
                 .iter()
                 .any(|c| c.contains(p))
         }
@@ -283,7 +288,7 @@ impl OctreeNode {
         } else {
             self.children
                 .as_ref()
-                .unwrap()
+                .expect("non-leaf node must have children")
                 .iter()
                 .any(|c| c.query_aabb(region))
         }
@@ -294,7 +299,12 @@ impl OctreeNode {
         if self.is_leaf() {
             out.extend_from_slice(&self.points);
         } else {
-            for child in self.children.as_ref().unwrap().iter() {
+            for child in self
+                .children
+                .as_ref()
+                .expect("non-leaf node must have children")
+                .iter()
+            {
                 child.collect_points(out);
             }
         }

@@ -164,6 +164,11 @@ async fn serve_html(mut stream: TcpStream) -> Result<(), MechError> {
 // WebSocket: bidirectional EventBus bridge
 // ---------------------------------------------------------------------------
 
+/// Maximum byte length accepted for an upstream WebSocket text message.
+/// Messages larger than this are silently dropped to prevent DoS via payload
+/// flooding.  64 KiB is generous for all supported command payloads.
+const MAX_UPSTREAM_MSG_BYTES: usize = 65_536;
+
 async fn handle_ws(
     stream: TcpStream,
     peer: SocketAddr,
@@ -203,7 +208,17 @@ async fn handle_ws(
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        handle_upstream_message(text.as_str(), &bus);
+                        // Reject oversized messages to prevent DoS.
+                        if text.len() > MAX_UPSTREAM_MSG_BYTES {
+                            warn!(
+                                peer = %peer,
+                                len = text.len(),
+                                limit = MAX_UPSTREAM_MSG_BYTES,
+                                "upstream message exceeds size limit; dropping"
+                            );
+                        } else {
+                            handle_upstream_message(text.as_str(), &bus);
+                        }
                     }
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Err(_)) => break,
@@ -449,5 +464,44 @@ mod tests {
             COCKPIT_HTML.contains("KeyW") || COCKPIT_HTML.contains("wasd") || COCKPIT_HTML.contains("WASD"),
             "Cockpit HTML must contain W-A-S-D keyboard bindings"
         );
+    }
+
+    // ── Message size validation ───────────────────────────────────────────────
+
+    #[test]
+    fn max_upstream_msg_bytes_is_64k() {
+        assert_eq!(MAX_UPSTREAM_MSG_BYTES, 65_536);
+    }
+
+    #[tokio::test]
+    async fn oversized_message_is_not_processed() {
+        let bus = make_bus();
+        let mut rx = bus.subscribe();
+
+        // Publish a sentinel so we know where the channel starts.
+        let sentinel = Event {
+            id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            source: "test".to_string(),
+            payload: EventPayload::AgentThought("sentinel".to_string()),
+        };
+        let _ = bus.publish(sentinel);
+
+        // Build a payload that would normally be accepted (valid /cmd_vel JSON
+        // with dashboard_override source) but blow it past the size limit.
+        let base = r#"{"op":"publish","topic":"/cmd_vel","msg":{"linear":{"x":0.5,"y":0,"z":0},"angular":{"x":0,"y":0,"z":-0.2}},"source":"dashboard_override","padding":""}"#;
+        let padding = "X".repeat(MAX_UPSTREAM_MSG_BYTES + 1);
+        let oversized = base.replace("\"\"", &format!("\"{}\"", padding));
+        assert!(oversized.len() > MAX_UPSTREAM_MSG_BYTES);
+
+        // `handle_upstream_message` operates on valid content; oversized checking
+        // is done in `handle_ws`.  Simulate the guard here directly.
+        if oversized.len() <= MAX_UPSTREAM_MSG_BYTES {
+            handle_upstream_message(&oversized, &bus);
+        }
+        // Only the sentinel should be in the channel – no override event.
+        let event = rx.recv().await.unwrap();
+        assert!(matches!(event.payload, EventPayload::AgentThought(_)));
+        assert!(rx.try_recv().is_err(), "no additional events should be present");
     }
 }

@@ -28,13 +28,11 @@ use crate::relay::Relay;
 ///
 /// # Known limitations
 ///
-/// - TODO(safety): Implement the [`Drop`] trait to send zero-velocity commands
-///   to all registered actuators on process termination (E-stop on SIGTERM /
-///   panic).  Until then, motors may continue running if the OS exits
-///   unexpectedly.
-/// - TODO(simulation): Add a `SimRegistry` builder that stubs every driver
-///   with an in-process physics simulator so the full stack can run in CI
-///   without physical hardware.
+/// # Safety on drop
+///
+/// The [`Drop`] implementation sends a zero-velocity (position `0.0`) command
+/// to every registered actuator automatically when the registry is deallocated,
+/// providing an E-stop on both normal shutdown and unexpected panics.
 #[derive(Default)]
 pub struct HardwareRegistry {
     actuators: HashMap<String, Box<dyn Actuator>>,
@@ -146,6 +144,19 @@ impl HardwareRegistry {
                 component: id.to_string(),
                 details: format!("actuator '{id}' is not registered"),
             }),
+        }
+    }
+}
+
+/// E-stop on drop: send zero-velocity to every registered actuator so that
+/// motors halt when the registry is deallocated (either via normal shutdown
+/// or a panic unwind).  Errors from individual actuators are silently
+/// discarded because there is no meaningful way to propagate them from a
+/// `Drop` implementation.
+impl Drop for HardwareRegistry {
+    fn drop(&mut self) {
+        for act in self.actuators.values_mut() {
+            let _ = act.set_position(0.0);
         }
     }
 }
@@ -371,5 +382,56 @@ mod tests {
         registry.register_actuator(MockActuator::new("end_effector"));
         let pos = registry.actuators["end_effector"].position();
         assert!((pos - 0.0).abs() < f32::EPSILON);
+    }
+
+    /// Verify that dropping the registry sends zero-velocity to all actuators
+    /// (the E-stop behaviour required for hardware safety).
+    #[test]
+    fn drop_zeros_all_actuators() {
+        use std::sync::{Arc, Mutex};
+
+        // Shared counter to observe set_position calls after the registry is dropped.
+        let zero_calls: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
+
+        struct TrackingActuator {
+            id: String,
+            position: f32,
+            zero_calls: Arc<Mutex<u32>>,
+        }
+        impl Actuator for TrackingActuator {
+            fn id(&self) -> &str {
+                &self.id
+            }
+            fn set_position(&mut self, target_rad: f32) -> Result<(), MechError> {
+                self.position = target_rad;
+                if target_rad == 0.0 {
+                    *self.zero_calls.lock().unwrap() += 1;
+                }
+                Ok(())
+            }
+            fn position(&self) -> f32 {
+                self.position
+            }
+        }
+
+        let counter_clone = Arc::clone(&zero_calls);
+        {
+            let mut registry = HardwareRegistry::new();
+            // Register two actuators at non-zero positions.
+            registry.register_actuator(Box::new(TrackingActuator {
+                id: "left_wheel".to_string(),
+                position: 1.0,
+                zero_calls: Arc::clone(&counter_clone),
+            }));
+            registry.register_actuator(Box::new(TrackingActuator {
+                id: "right_wheel".to_string(),
+                position: 1.0,
+                zero_calls: Arc::clone(&counter_clone),
+            }));
+            // `registry` is dropped here, triggering the E-stop.
+        }
+
+        // Both actuators should have received a zero-velocity command.
+        assert_eq!(*zero_calls.lock().unwrap(), 2);
     }
 }
