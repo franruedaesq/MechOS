@@ -276,6 +276,29 @@ mod tests {
         assert!((composed.translation.x - 3.0).abs() < 1e-5);
     }
 
+    #[test]
+    fn transform_compose_with_rotation_and_translation() {
+        // T1: 1m forward (+X) and 90° yaw rotation
+        let q90z = Quaternion::new(FRAC_1_SQRT_2, 0.0, 0.0, FRAC_1_SQRT_2);
+        let t1 = Transform3D::new(Vec3::new(1.0, 0.0, 0.0), q90z);
+
+        // T2: 1m forward (+X) in T1's frame (which is +Y in world frame), 90° yaw rotation
+        let t2 = Transform3D::new(Vec3::new(1.0, 0.0, 0.0), q90z);
+
+        let composed = t1.compose(t2);
+
+        // Translation should be 1m in X and 1m in Y in the world frame
+        assert!((composed.translation.x - 1.0).abs() < 1e-5, "x={}", composed.translation.x);
+        assert!((composed.translation.y - 1.0).abs() < 1e-5, "y={}", composed.translation.y);
+        assert!(composed.translation.z.abs() < 1e-5);
+
+        // Total rotation should be 180° yaw (w=0, z=1)
+        assert!(composed.rotation.w.abs() < 1e-5, "w={}", composed.rotation.w);
+        assert!(composed.rotation.x.abs() < 1e-5);
+        assert!(composed.rotation.y.abs() < 1e-5);
+        assert!((composed.rotation.z - 1.0).abs() < 1e-5, "z={}", composed.rotation.z);
+    }
+
     // ── TfEngine ────────────────────────────────────────────────────────────
 
     #[test]
