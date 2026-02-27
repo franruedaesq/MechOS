@@ -61,7 +61,7 @@ pub fn run(shutdown: Arc<AtomicBool>) {
             "/models" => cmd_models(),
             "/connections" => cmd_connections(),
             "/start" => {
-                cmd_start();
+                cmd_start(shutdown.clone());
                 // After boot sequence completes we return to the prompt.
             }
             "/quit" | "/exit" => {
@@ -84,6 +84,8 @@ pub fn run(shutdown: Arc<AtomicBool>) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Command handlers
 // ─────────────────────────────────────────────────────────────────────────────
+
+static AGENT_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn cmd_help() {
     println!();
@@ -245,7 +247,12 @@ fn cmd_connections() {
     );
 }
 
-fn cmd_start() {
+fn cmd_start(shutdown: Arc<AtomicBool>) {
+    if AGENT_RUNNING.swap(true, Ordering::SeqCst) {
+        println!("{}", "  ⚠ An agent loop is already running.".yellow());
+        return;
+    }
+
     let cfg = load_config_or_default();
 
     println!();
@@ -299,12 +306,32 @@ fn cmd_start() {
         cfg.active_model.yellow()
     );
     io::stdout().flush().ok();
+
+    // Use a persistent memory store in ~/.mechos/memory.db
+    let memory_db_buf = config::config_path_for_home(
+        &std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| ".".to_string()),
+    )
+    .parent()
+    .unwrap()
+    .join("memory.db");
+
+    // Ensure the directory exists
+    if let Some(parent) = memory_db_buf.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let memory_db_path = memory_db_buf.to_string_lossy().to_string();
+
     let loop_config = mechos_runtime::AgentLoopConfig {
         llm_base_url: cfg.ollama_url.clone(),
         llm_model: cfg.active_model.clone(),
+        persistence_path: Some(memory_db_path),
         ..Default::default()
     };
-    let _agent = match mechos_runtime::AgentLoop::new(loop_config) {
+
+    let mut agent = match mechos_runtime::AgentLoop::new(loop_config) {
         Ok(agent) => agent,
         Err(e) => {
             println!("{} {}", "ERROR".red(), e);
@@ -322,6 +349,34 @@ fn cmd_start() {
     );
     println!("{}", "═══════════════════════════════════════".bold());
     println!();
+
+    // ── Main Execution Loop ────────────────────────────────────────────────
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(100)); // 10Hz
+        let mut last_tick = std::time::Instant::now();
+
+        while !shutdown.load(Ordering::Relaxed) {
+            interval.tick().await;
+            let now = std::time::Instant::now();
+            let dt = now.duration_since(last_tick).as_secs_f32();
+            last_tick = now;
+
+            match agent.tick(dt).await {
+                Ok(_) => {}
+                Err(mechos_types::MechError::LlmInferenceFailed(e)) => {
+                    // Transient error (e.g. Ollama busy), trace it but keep running
+                    tracing::warn!("LlmInferenceFailed: {}", e);
+                }
+                Err(e) => {
+                    tracing::error!("AgentLoop fatal error: {}", e);
+                    // We might want to break here, but for now we keep trying
+                    // or maybe backoff.
+                }
+            }
+        }
+        println!("{}", "AgentLoop shutdown complete.".dimmed());
+        AGENT_RUNNING.store(false, Ordering::SeqCst);
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

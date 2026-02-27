@@ -86,6 +86,9 @@ pub struct AgentLoopConfig {
     pub loop_guard_threshold: usize,
     /// Capability grants to issue to the `"agent"` identity at startup.
     pub capabilities: Vec<Capability>,
+    /// Optional path to the persistent episodic memory database.
+    /// If `None`, an in-memory store is used (data lost on exit).
+    pub persistence_path: Option<String>,
 }
 
 impl Default for AgentLoopConfig {
@@ -99,6 +102,7 @@ impl Default for AgentLoopConfig {
                 Capability::HardwareInvoke("drive_base".to_string()),
                 Capability::HardwareInvoke("hitl".to_string()),
             ],
+            persistence_path: None,
         }
     }
 }
@@ -164,9 +168,18 @@ impl AgentLoop {
         );
         let octree = Octree::new(world_bounds, 8);
 
-        // In-memory episodic store (no persistence path configured).
-        let memory = EpisodicStore::open_in_memory()
-            .map_err(|e| MechError::Serialization(format!("failed to open in-memory episodic store: {e}")))?;
+        // Open persistent store if configured, otherwise fallback to in-memory.
+        let memory = if let Some(path) = &config.persistence_path {
+            info!("opening persistent episodic store at: {}", path);
+            EpisodicStore::open(path).map_err(|e| {
+                MechError::Serialization(format!("failed to open episodic store at {path}: {e}"))
+            })?
+        } else {
+            warn!("no persistence_path configured; using in-memory episodic store (data will be lost)");
+            EpisodicStore::open_in_memory().map_err(|e| {
+                MechError::Serialization(format!("failed to open in-memory episodic store: {e}"))
+            })?
+        };
 
         let bus = EventBus::default();
 
@@ -313,7 +326,7 @@ impl AgentLoop {
     /// - The LLM response cannot be parsed as a [`HardwareIntent`].
     /// - The [`KernelGate`] rejects the intent.
     /// - The [`LoopGuard`] detects a repetitive hallucination loop.
-    pub fn tick(&mut self, dt: f32) -> Result<HardwareIntent, MechError> {
+    pub async fn tick(&mut self, dt: f32) -> Result<HardwareIntent, MechError> {
         // ── Drain pending bus events ───────────────────────────────────────────
         // Pick up any human responses or override notifications that arrived
         // between ticks without blocking.
@@ -425,7 +438,7 @@ impl AgentLoop {
         }
 
         // ── 3. Decide ─────────────────────────────────────────────────────────
-        let raw = self.llm.complete(&messages).map_err(|e| {
+        let raw = self.llm.complete(&messages).await.map_err(|e| {
             MechError::LlmInferenceFailed(e.to_string())
         })?;
 
@@ -499,6 +512,25 @@ impl AgentLoop {
                         }
                         EventPayload::AgentModeToggle { paused } => {
                             self.paused = *paused;
+                        }
+                        // Ingest LidarScan into the Octree
+                        EventPayload::LidarScan {
+                            ranges,
+                            angle_min_rad,
+                            angle_increment_rad,
+                        } => {
+                            for (i, r) in ranges.iter().enumerate() {
+                                // Ignore invalid or out-of-range returns
+                                if *r < 0.1 || *r > 20.0 || !r.is_finite() {
+                                    continue;
+                                }
+                                let angle = angle_min_rad + (i as f32 * angle_increment_rad);
+                                let x = r * angle.cos();
+                                let y = r * angle.sin();
+                                // We assume a 2D scan lies on the z=0 plane relative to the sensor frame.
+                                // In a real TF tree this would be transformed to the map frame.
+                                self.octree.insert(Point3::new(x, y, 0.0));
+                            }
                         }
                         EventPayload::AgentThought(json_str)
                             if event.source
@@ -618,11 +650,11 @@ mod tests {
         assert_ne!(h1, h2);
     }
 
-    #[test]
-    fn tick_returns_llm_error_when_server_unavailable() {
+    #[tokio::test]
+    async fn tick_returns_llm_error_when_server_unavailable() {
         // No live LLM server – tick must return LlmInferenceFailed, not panic.
         let mut agent = default_agent();
-        let result = agent.tick(0.1);
+        let result = agent.tick(0.1).await;
         assert!(matches!(result, Err(MechError::LlmInferenceFailed(_))));
     }
 
@@ -643,12 +675,12 @@ mod tests {
         assert_eq!(agent.pending_human_response.as_deref(), Some("Yes, proceed"));
     }
 
-    #[test]
-    fn tick_pauses_when_waiting_for_human_with_no_response() {
+    #[tokio::test]
+    async fn tick_pauses_when_waiting_for_human_with_no_response() {
         let mut agent = default_agent();
         agent.waiting_for_human = true;
         // No pending response – tick must pause.
-        let result = agent.tick(0.1);
+        let result = agent.tick(0.1).await;
         assert!(
             matches!(&result, Err(MechError::LlmInferenceFailed(msg)) if msg.contains("waiting for human")),
             "expected waiting-for-human pause, got: {result:?}"
@@ -657,14 +689,14 @@ mod tests {
         assert!(agent.is_waiting_for_human());
     }
 
-    #[test]
-    fn tick_resumes_when_human_response_is_available() {
+    #[tokio::test]
+    async fn tick_resumes_when_human_response_is_available() {
         // inject a pending response; tick should proceed to LLM (which will
         // fail because no server is running, but not with the "waiting" error).
         let mut agent = default_agent();
         agent.waiting_for_human = true;
         agent.pending_human_response = Some("Yes, push it".to_string());
-        let result = agent.tick(0.1);
+        let result = agent.tick(0.1).await;
         // The "waiting" state should have been cleared.
         assert!(!agent.is_waiting_for_human());
         // With no LLM, we expect LlmInferenceFailed (not the waiting error).
@@ -689,11 +721,11 @@ mod tests {
         assert!(agent.is_override_active());
     }
 
-    #[test]
-    fn tick_returns_hardware_fault_when_override_active() {
+    #[tokio::test]
+    async fn tick_returns_hardware_fault_when_override_active() {
         let mut agent = default_agent();
         agent.handle_manual_override(0.5, 0.0);
-        let result = agent.tick(0.1);
+        let result = agent.tick(0.1).await;
         assert!(
             matches!(
                 &result,
@@ -704,14 +736,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn override_lifts_after_suspension_duration_elapses() {
+    #[tokio::test]
+    async fn override_lifts_after_suspension_duration_elapses() {
         let mut agent = default_agent();
         agent.handle_manual_override(0.5, 0.0);
         // Backdating the last-seen timestamp simulates the 10-s window expiring.
         agent.override_last_seen =
             Some(Instant::now() - OVERRIDE_SUSPENSION_DURATION - Duration::from_millis(1));
-        let result = agent.tick(0.1);
+        let result = agent.tick(0.1).await;
         // Override should be cleared.
         assert!(!agent.is_override_active());
         // tick should proceed to the LLM (which is unavailable, so LlmInferenceFailed).
@@ -788,11 +820,11 @@ mod tests {
         assert!(!agent.is_paused());
     }
 
-    #[test]
-    fn tick_returns_hardware_fault_when_paused() {
+    #[tokio::test]
+    async fn tick_returns_hardware_fault_when_paused() {
         let mut agent = default_agent();
         agent.set_paused(true);
-        let result = agent.tick(0.1);
+        let result = agent.tick(0.1).await;
         assert!(
             matches!(
                 &result,

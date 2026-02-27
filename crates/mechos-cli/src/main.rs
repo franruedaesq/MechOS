@@ -22,7 +22,8 @@ use tracing::warn;
 use mechos_middleware::{EventBus, Topic};
 use mechos_types::{Event, EventPayload};
 
-fn main() {
+#[tokio::main]
+async fn main() {
     // ── Structured logging ────────────────────────────────────────────────
     // Initialise tracing-subscriber using RUST_LOG (defaults to "info").
     // The CLI's user-facing output still uses println! for UX consistency.
