@@ -110,13 +110,13 @@ struct Choice {
 // LlmDriver
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A synchronous client for an OpenAI-compatible chat-completions endpoint.
+/// An async client for an OpenAI-compatible chat-completions endpoint.
 ///
 /// Construct once and reuse across OODA loop iterations.
 pub struct LlmDriver {
     base_url: String,
     model: String,
-    client: reqwest::blocking::Client,
+    client: reqwest::Client,
 }
 
 impl LlmDriver {
@@ -126,7 +126,7 @@ impl LlmDriver {
         Self {
             base_url: base_url.into(),
             model: model.into(),
-            client: reqwest::blocking::Client::new(),
+            client: reqwest::Client::new(),
         }
     }
 
@@ -142,7 +142,7 @@ impl LlmDriver {
     ///
     /// Returns [`LlmError::Http`] if the request fails, or
     /// [`LlmError::BadResponse`] if the response shape is unexpected.
-    pub fn complete(&self, messages: &[ChatMessage]) -> Result<String, LlmError> {
+    pub async fn complete(&self, messages: &[ChatMessage]) -> Result<String, LlmError> {
         // Inject stability guidelines into every system message (or prepend one
         // if the caller did not supply a system message at all).
         let mut augmented: Vec<ChatMessage> = messages
@@ -186,9 +186,11 @@ impl LlmDriver {
             .client
             .post(&url)
             .json(&body)
-            .send()?
+            .send()
+            .await?
             .error_for_status()?
-            .json()?;
+            .json()
+            .await?;
 
         response
             .choices
