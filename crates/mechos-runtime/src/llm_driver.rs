@@ -113,6 +113,15 @@ struct Choice {
 /// An async client for an OpenAI-compatible chat-completions endpoint.
 ///
 /// Construct once and reuse across OODA loop iterations.
+///
+/// # Known limitations
+///
+/// - TODO(cost-control): Add token counting, cost estimation, and per-minute
+///   rate limiting to prevent runaway API spend when using cloud providers
+///   such as OpenAI.  Track in issue #<rate-limiting>.
+/// - TODO(observability): Attach OpenTelemetry span attributes (model name,
+///   prompt token count, latency) so LLM calls are traceable end-to-end from
+///   intent to hardware action.
 pub struct LlmDriver {
     base_url: String,
     model: String,

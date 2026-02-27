@@ -25,6 +25,16 @@ use crate::relay::Relay;
 ///
 /// Construct with [`HardwareRegistry::new`], register drivers, then call
 /// [`HardwareRegistry::dispatch`] to translate intents into hardware calls.
+///
+/// # Known limitations
+///
+/// - TODO(safety): Implement the [`Drop`] trait to send zero-velocity commands
+///   to all registered actuators on process termination (E-stop on SIGTERM /
+///   panic).  Until then, motors may continue running if the OS exits
+///   unexpectedly.
+/// - TODO(simulation): Add a `SimRegistry` builder that stubs every driver
+///   with an in-process physics simulator so the full stack can run in CI
+///   without physical hardware.
 #[derive(Default)]
 pub struct HardwareRegistry {
     actuators: HashMap<String, Box<dyn Actuator>>,

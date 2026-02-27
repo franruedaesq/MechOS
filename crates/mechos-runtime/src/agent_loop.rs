@@ -26,12 +26,14 @@
 //!
 //! # Manual Override (Safety Interlock)
 //!
-//! Calling [`AgentLoop::handle_manual_override`] arms a 10-second AI
-//! suspension.  While the suspension is active [`tick`] returns early without
-//! invoking the LLM, and the [`ManualOverrideInterlock`] rule registered on the
-//! [`StateVerifier`] rejects any AI-sourced `Drive` commands that may have been
-//! in flight.  The suspension is cleared automatically once 10 seconds have
-//! elapsed since the last call to `handle_manual_override`.
+//! Calling [`AgentLoop::handle_manual_override`] arms a configurable AI
+//! suspension (default 10 s, set via
+//! [`AgentLoopConfig::override_suspension_secs`]).  While the suspension is
+//! active [`tick`] returns early without invoking the LLM, and the
+//! [`ManualOverrideInterlock`] rule registered on the [`StateVerifier`] rejects
+//! any AI-sourced `Drive` commands that may have been in flight.  The
+//! suspension is cleared automatically once the configured duration has elapsed
+//! since the last call to `handle_manual_override`.
 //!
 //! # Example
 //!
@@ -69,8 +71,10 @@ use crate::loop_guard::LoopGuard;
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// How long the AI is suspended after the most recent manual-override command.
-const OVERRIDE_SUSPENSION_DURATION: Duration = Duration::from_secs(10);
+/// Default duration for which the AI is suspended after a manual-override
+/// command.  Tunable at construction time via
+/// [`AgentLoopConfig::override_suspension_secs`].
+const DEFAULT_OVERRIDE_SUSPENSION_SECS: u64 = 10;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration
@@ -95,6 +99,11 @@ pub struct AgentLoopConfig {
     /// (e.g. [`mechos_middleware::Ros2Adapter`]) to share the same channel.
     /// When `None` a private bus is created internally.
     pub bus: Option<EventBus>,
+    /// How long (in seconds) the AI is suspended after the most recent
+    /// manual-override command.  Defaults to
+    /// [`DEFAULT_OVERRIDE_SUSPENSION_SECS`] (10 s).  Tune this to match the
+    /// reaction time requirements of your robot's hardware.
+    pub override_suspension_secs: u64,
 }
 
 impl Default for AgentLoopConfig {
@@ -110,6 +119,7 @@ impl Default for AgentLoopConfig {
             ],
             memory_path: None,
             bus: None,
+            override_suspension_secs: DEFAULT_OVERRIDE_SUSPENSION_SECS,
         }
     }
 }
@@ -145,6 +155,8 @@ pub struct AgentLoop {
     override_active: Arc<AtomicBool>,
     /// Wall-clock time of the most recent manual-override drive command.
     override_last_seen: Option<Instant>,
+    /// How long the AI remains suspended after each manual-override command.
+    override_suspension_duration: Duration,
     // ── Cockpit pause/resume state ────────────────────────────────────────────
     /// `true` when the Cockpit operator has explicitly paused the autonomous
     /// OODA cycle via the mode-toggle button.  Independent of the joystick
@@ -205,6 +217,9 @@ impl AgentLoop {
 
         let loop_guard = LoopGuard::new(config.loop_guard_threshold);
 
+        let override_suspension_duration =
+            Duration::from_secs(config.override_suspension_secs);
+
         Ok(Self {
             llm,
             fusion,
@@ -217,6 +232,7 @@ impl AgentLoop {
             pending_human_response: None,
             override_active,
             override_last_seen: None,
+            override_suspension_duration,
             paused: false,
             bus_rx,
         })
@@ -272,12 +288,12 @@ impl AgentLoop {
     // -------------------------------------------------------------------------
 
     /// Route a dashboard manual-override drive command directly onto the bus,
-    /// bypassing the AI gate, and arm the 10-second AI suspension.
+    /// bypassing the AI gate, and arm the configurable AI suspension.
     ///
     /// Call this every time the dashboard sends a Twist command tagged
     /// `source: "dashboard_override"`.  The AI suspension is lifted
     /// automatically once [`tick`][Self::tick] runs and finds that more than
-    /// [`OVERRIDE_SUSPENSION_DURATION`] has elapsed since the last call.
+    /// `override_suspension_duration` has elapsed since the last call.
     pub fn handle_manual_override(&mut self, linear_velocity: f32, angular_velocity: f32) {
         // Arm the interlock so AI Drive commands are rejected.
         self.override_active.store(true, Ordering::Release);
@@ -302,7 +318,7 @@ impl AgentLoop {
     /// Pause or resume the autonomous OODA cycle via the Cockpit mode-toggle.
     ///
     /// When `paused` is `true` subsequent calls to [`tick`][Self::tick] return
-    /// early without invoking the LLM.  This is independent of the 10-second
+    /// early without invoking the LLM.  This is independent of the configurable
     /// joystick manual-override interlock.
     pub fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
@@ -345,8 +361,8 @@ impl AgentLoop {
         // ── Manual override guard ──────────────────────────────────────────────
         if self.override_active.load(Ordering::Acquire) {
             if let Some(last) = self.override_last_seen {
-                if last.elapsed() >= OVERRIDE_SUSPENSION_DURATION {
-                    // 10-second window has expired: lift the AI suspension.
+                if last.elapsed() >= self.override_suspension_duration {
+                    // Configured suspension window has expired: lift the AI suspension.
                     self.override_active.store(false, Ordering::Release);
                     self.override_last_seen = None;
                 } else {
@@ -392,7 +408,11 @@ impl AgentLoop {
 
         // ── 2. Orient ─────────────────────────────────────────────────────────
         // Retrieve the most recent episodic memories as context.
-        let memories = self.memory.all_entries().unwrap_or_default();
+        // TODO(perf): move SQLite I/O into `tokio::task::spawn_blocking` once
+        // EpisodicStore is refactored to be cheaply cloneable or wrapped in
+        // Arc<Mutex<>> to satisfy the `'static + Send` bound.
+        let memories = tokio::task::block_in_place(|| self.memory.all_entries())
+            .unwrap_or_default();
         let memory_entries: Vec<String> = memories
             .iter()
             .rev()
@@ -653,7 +673,7 @@ mod tests {
         assert_ne!(h1, h2);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn tick_returns_llm_error_when_server_unavailable() {
         // No live LLM server – tick must return LlmInferenceFailed, not panic.
         let mut agent = default_agent();
@@ -678,7 +698,7 @@ mod tests {
         assert_eq!(agent.pending_human_response.as_deref(), Some("Yes, proceed"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn tick_pauses_when_waiting_for_human_with_no_response() {
         let mut agent = default_agent();
         agent.waiting_for_human = true;
@@ -692,7 +712,7 @@ mod tests {
         assert!(agent.is_waiting_for_human());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn tick_resumes_when_human_response_is_available() {
         // inject a pending response; tick should proceed to LLM (which will
         // fail because no server is running, but not with the "waiting" error).
@@ -724,7 +744,7 @@ mod tests {
         assert!(agent.is_override_active());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn tick_returns_hardware_fault_when_override_active() {
         let mut agent = default_agent();
         agent.handle_manual_override(0.5, 0.0);
@@ -739,13 +759,13 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn override_lifts_after_suspension_duration_elapses() {
         let mut agent = default_agent();
         agent.handle_manual_override(0.5, 0.0);
-        // Backdating the last-seen timestamp simulates the 10-s window expiring.
+        // Backdating the last-seen timestamp simulates the suspension window expiring.
         agent.override_last_seen =
-            Some(Instant::now() - OVERRIDE_SUSPENSION_DURATION - Duration::from_millis(1));
+            Some(Instant::now() - agent.override_suspension_duration - Duration::from_millis(1));
         let result = agent.tick(0.1).await;
         // Override should be cleared.
         assert!(!agent.is_override_active());
@@ -823,7 +843,7 @@ mod tests {
         assert!(!agent.is_paused());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
     async fn tick_returns_hardware_fault_when_paused() {
         let mut agent = default_agent();
         agent.set_paused(true);
