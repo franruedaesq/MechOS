@@ -271,20 +271,19 @@ pub(crate) fn handle_upstream_message(text: &str, bus: &Arc<EventBus>) {
     }
 
     // ── Cockpit mode toggle (pause / resume autonomous loop) ────────────────
-    if topic == "/agent/mode" {
-        if let Some(paused) = json
+    if topic == "/agent/mode"
+        && let Some(paused) = json
             .get("msg")
             .and_then(|m| m.get("paused"))
             .and_then(|p| p.as_bool())
-        {
-            let event = Event {
-                id: Uuid::new_v4(),
-                timestamp: Utc::now(),
-                source: "mechos-cockpit::server".to_string(),
-                payload: EventPayload::AgentModeToggle { paused },
-            };
-            let _ = bus.publish(event);
-        }
+    {
+        let event = Event {
+            id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            source: "mechos-cockpit::server".to_string(),
+            payload: EventPayload::AgentModeToggle { paused },
+        };
+        let _ = bus.publish(event);
     }
 }
 

@@ -264,7 +264,7 @@ impl OctreeNode {
             return false;
         }
         if self.is_leaf() {
-            self.points.iter().any(|&q| q == p)
+            self.points.contains(&p)
         } else {
             self.children
                 .as_ref()

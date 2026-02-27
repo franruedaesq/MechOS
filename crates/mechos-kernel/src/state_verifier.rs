@@ -227,13 +227,13 @@ impl Rule for ManualOverrideInterlock {
     /// Reject any [`HardwareIntent::Drive`] command while the override flag is
     /// set.  All other intent variants always pass this rule.
     fn check(&self, intent: &HardwareIntent) -> Result<(), MechError> {
-        if self.active.load(Ordering::Acquire) {
-            if let HardwareIntent::Drive { .. } = intent {
-                return Err(MechError::HardwareFault {
-                    component: "drive_base".to_string(),
-                    details: "manual override active; AI drive commands suspended".to_string(),
-                });
-            }
+        if self.active.load(Ordering::Acquire)
+            && let HardwareIntent::Drive { .. } = intent
+        {
+            return Err(MechError::HardwareFault {
+                component: "drive_base".to_string(),
+                details: "manual override active; AI drive commands suspended".to_string(),
+            });
         }
         Ok(())
     }

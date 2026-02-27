@@ -49,7 +49,7 @@ impl Vec3 {
         Self::new(0.0, 0.0, 0.0)
     }
 
-    pub fn add(self, rhs: Self) -> Self {
+    pub fn add_tf(self, rhs: Self) -> Self {
         Self::new(self.x + rhs.x, self.y + rhs.y, self.z + rhs.z)
     }
 }
@@ -76,7 +76,7 @@ impl Quaternion {
     }
 
     /// Hamilton product: compose two rotations.
-    pub fn mul(self, rhs: Self) -> Self {
+    pub fn mul_tf(self, rhs: Self) -> Self {
         Self::new(
             self.w * rhs.w - self.x * rhs.x - self.y * rhs.y - self.z * rhs.z,
             self.w * rhs.x + self.x * rhs.w + self.y * rhs.z - self.z * rhs.y,
@@ -94,7 +94,7 @@ impl Quaternion {
     pub fn rotate(self, v: Vec3) -> Vec3 {
         // Express v as a pure quaternion.
         let p = Self::new(0.0, v.x, v.y, v.z);
-        let rotated = self.mul(p).mul(self.conjugate());
+        let rotated = self.mul_tf(p).mul_tf(self.conjugate());
         Vec3::new(rotated.x, rotated.y, rotated.z)
     }
 }
@@ -133,8 +133,8 @@ impl Transform3D {
     /// If `self` = T_A_B and `other` = T_B_C, the result is T_A_C.
     pub fn compose(self, other: Self) -> Self {
         // Rotate other's translation by self's rotation, then add.
-        let translated = self.translation.add(self.rotation.rotate(other.translation));
-        let rotated = self.rotation.mul(other.rotation);
+        let translated = self.translation.add_tf(self.rotation.rotate(other.translation));
+        let rotated = self.rotation.mul_tf(other.rotation);
         Self::new(translated, rotated)
     }
 }
@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn quaternion_conjugate_is_inverse() {
         let q = Quaternion::new(FRAC_1_SQRT_2, 0.0, 0.0, FRAC_1_SQRT_2);
-        let prod = q.mul(q.conjugate());
+        let prod = q.mul_tf(q.conjugate());
         // q * q* should be identity (w≈1, x≈y≈z≈0)
         assert!((prod.w - 1.0).abs() < 1e-5);
         assert!(prod.x.abs() < 1e-5);
