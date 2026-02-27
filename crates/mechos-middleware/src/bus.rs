@@ -19,6 +19,7 @@
 
 use mechos_types::{Event, MechError};
 use tokio::sync::broadcast;
+use tracing::warn;
 
 /// Default channel capacity (number of buffered events before old ones are
 /// dropped for slow subscribers).
@@ -221,7 +222,7 @@ impl TopicSubscriber {
                 Ok(_) => continue,
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     // Subscriber fell behind; log and continue.
-                    eprintln!("[mechos-middleware] TopicSubscriber lagged by {n} events");
+                    warn!(topic = %self.topic, lagged_by = n, "TopicSubscriber lagged");
                     continue;
                 }
                 Err(broadcast::error::RecvError::Closed) => return None,

@@ -13,6 +13,7 @@ use mechos_middleware::EventBus;
 use mechos_types::{Event, EventPayload, MechError};
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
+use tracing::{error, info, warn};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use uuid::Uuid;
@@ -87,7 +88,7 @@ impl CockpitServer {
             MechError::Serialization(format!("[mechos-cockpit] bind error on {addr}: {e}"))
         })?;
 
-        println!("[mechos-cockpit] Cockpit UI listening on http://localhost:{}", self.port);
+        info!("Cockpit UI listening on http://localhost:{}", self.port);
 
         loop {
             match listener.accept().await {
@@ -95,12 +96,12 @@ impl CockpitServer {
                     let bus = Arc::clone(&self.bus);
                     tokio::spawn(async move {
                         if let Err(e) = handle_connection(stream, peer, bus).await {
-                            eprintln!("[mechos-cockpit] client {peer} error: {e}");
+                            error!(peer = %peer, error = %e, "client connection error");
                         }
                     });
                 }
                 Err(e) => {
-                    eprintln!("[mechos-cockpit] accept error: {e}");
+                    error!(error = %e, "accept error");
                 }
             }
         }
@@ -188,12 +189,12 @@ async fn handle_ws(
                                 }
                             }
                             Err(e) => {
-                                eprintln!("[mechos-cockpit] serialization error: {e}");
+                                error!(error = %e, "serialization error");
                             }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        eprintln!("[mechos-cockpit] ws client {peer} lagged by {n} events");
+                        warn!(peer = %peer, lagged_by = n, "ws client lagged");
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }

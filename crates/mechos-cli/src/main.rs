@@ -17,11 +17,25 @@ mod repl;
 use colored::Colorize;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tracing::warn;
 
 use mechos_middleware::{EventBus, Topic};
 use mechos_types::{Event, EventPayload};
 
 fn main() {
+    // ── Structured logging ────────────────────────────────────────────────
+    // Initialise tracing-subscriber using RUST_LOG (defaults to "info").
+    // The CLI's user-facing output still uses println! for UX consistency.
+    let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&log_level)),
+        )
+        .with_target(true)
+        .compact()
+        .init();
+
     print_banner();
 
     // ── Shared shutdown flag ──────────────────────────────────────────────
@@ -33,7 +47,7 @@ fn main() {
     let bus_for_ctrlc = Arc::new(EventBus::new(64));
     let bus_ctrlc_ref = bus_for_ctrlc.clone();
 
-    ctrlc::set_handler(move || {
+    if let Err(e) = ctrlc::set_handler(move || {
         println!();
         println!("{}", "⚠  Ctrl-C received – initiating graceful shutdown …".yellow().bold());
 
@@ -55,8 +69,9 @@ fn main() {
         println!("{}", "  ✓ Exiting MechOS.".green());
 
         shutdown_clone.store(true, Ordering::SeqCst);
-    })
-    .expect("Failed to install Ctrl-C handler");
+    }) {
+        warn!(error = %e, "Failed to install Ctrl-C handler; graceful shutdown on Ctrl-C will not be available");
+    }
 
     // ── First-Run Wizard ──────────────────────────────────────────────────
     match config::load() {

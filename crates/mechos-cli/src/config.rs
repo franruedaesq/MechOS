@@ -116,9 +116,39 @@ pub(crate) fn load_from(path: &PathBuf) -> Result<Option<Config>, String> {
     }
     let raw = fs::read_to_string(path)
         .map_err(|e| format!("Failed to read config at {}: {}", path.display(), e))?;
-    let cfg: Config = toml::from_str(&raw)
+    let mut cfg: Config = toml::from_str(&raw)
         .map_err(|e| format!("Failed to parse config: {}", e))?;
+    apply_env_overrides(&mut cfg);
     Ok(Some(cfg))
+}
+
+/// Apply `MECHOS_*` environment variable overrides to `cfg`.
+///
+/// Supported variables:
+///
+/// | Variable | Config field |
+/// |---|---|
+/// | `MECHOS_OLLAMA_URL` | `ollama_url` |
+/// | `MECHOS_MODEL` | `active_model` |
+/// | `MECHOS_DASHBOARD_PORT` | `dashboard_port` |
+/// | `MECHOS_WEBUI_PORT` | `webui_port` |
+pub fn apply_env_overrides(cfg: &mut Config) {
+    if let Ok(v) = std::env::var("MECHOS_OLLAMA_URL") {
+        cfg.ollama_url = v;
+    }
+    if let Ok(v) = std::env::var("MECHOS_MODEL") {
+        cfg.active_model = v;
+    }
+    if let Ok(v) = std::env::var("MECHOS_DASHBOARD_PORT") {
+        if let Ok(port) = v.parse::<u16>() {
+            cfg.dashboard_port = port;
+        }
+    }
+    if let Ok(v) = std::env::var("MECHOS_WEBUI_PORT") {
+        if let Ok(port) = v.parse::<u16>() {
+            cfg.webui_port = port;
+        }
+    }
 }
 
 /// Save the config to disk, creating `~/.mechos/` if necessary.
@@ -171,5 +201,56 @@ mod tests {
         let path = config_path_for_home(&dir.path().to_string_lossy());
         let result = load_from(&path).expect("no error");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn apply_env_overrides_changes_ollama_url() {
+        // SAFETY: single-threaded test; no data races on env vars.
+        unsafe { std::env::set_var("MECHOS_OLLAMA_URL", "http://robot-host:11434") };
+        let mut cfg = Config::default();
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.ollama_url, "http://robot-host:11434");
+        unsafe { std::env::remove_var("MECHOS_OLLAMA_URL") };
+    }
+
+    #[test]
+    fn apply_env_overrides_changes_model() {
+        // SAFETY: single-threaded test; no data races on env vars.
+        unsafe { std::env::set_var("MECHOS_MODEL", "gpt-4o") };
+        let mut cfg = Config::default();
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.active_model, "gpt-4o");
+        unsafe { std::env::remove_var("MECHOS_MODEL") };
+    }
+
+    #[test]
+    fn apply_env_overrides_changes_dashboard_port() {
+        // SAFETY: single-threaded test; no data races on env vars.
+        unsafe { std::env::set_var("MECHOS_DASHBOARD_PORT", "9999") };
+        let mut cfg = Config::default();
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.dashboard_port, 9999);
+        unsafe { std::env::remove_var("MECHOS_DASHBOARD_PORT") };
+    }
+
+    #[test]
+    fn apply_env_overrides_ignores_invalid_port() {
+        // SAFETY: single-threaded test; no data races on env vars.
+        unsafe { std::env::set_var("MECHOS_DASHBOARD_PORT", "not-a-port") };
+        let mut cfg = Config::default();
+        let original_port = cfg.dashboard_port;
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.dashboard_port, original_port);
+        unsafe { std::env::remove_var("MECHOS_DASHBOARD_PORT") };
+    }
+
+    #[test]
+    fn apply_env_overrides_changes_webui_port() {
+        // SAFETY: single-threaded test; no data races on env vars.
+        unsafe { std::env::set_var("MECHOS_WEBUI_PORT", "8181") };
+        let mut cfg = Config::default();
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.webui_port, 8181);
+        unsafe { std::env::remove_var("MECHOS_WEBUI_PORT") };
     }
 }

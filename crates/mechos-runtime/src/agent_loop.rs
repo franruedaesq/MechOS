@@ -40,7 +40,7 @@
 //!
 //! // Build the loop with sensible defaults and run one tick.
 //! let config = AgentLoopConfig::default();
-//! let mut agent = AgentLoop::new(config);
+//! let mut agent = AgentLoop::new(config).expect("failed to initialise agent loop");
 //! // agent.tick() drives one full OODA cycle.
 //! ```
 
@@ -59,6 +59,7 @@ use mechos_perception::fusion::{FusedState, ImuData, OdometryData, SensorFusion}
 use mechos_perception::octree::{Aabb, Octree, Point3};
 use mechos_types::{Capability, Event, EventPayload, HardwareIntent, MechError};
 use tokio::sync::broadcast;
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use crate::llm_driver::{ChatMessage, LlmDriver, Role};
@@ -145,7 +146,12 @@ pub struct AgentLoop {
 
 impl AgentLoop {
     /// Construct a new [`AgentLoop`] from the supplied configuration.
-    pub fn new(config: AgentLoopConfig) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MechError::Serialization`] if the in-memory episodic store
+    /// cannot be initialised (e.g. SQLite is unavailable).
+    pub fn new(config: AgentLoopConfig) -> Result<Self, MechError> {
         let llm = LlmDriver::new(&config.llm_base_url, &config.llm_model);
 
         // Sensor fusion with a strong IMU weight.
@@ -160,7 +166,7 @@ impl AgentLoop {
 
         // In-memory episodic store (no persistence path configured).
         let memory = EpisodicStore::open_in_memory()
-            .expect("failed to open in-memory episodic store");
+            .map_err(|e| MechError::Serialization(format!("failed to open in-memory episodic store: {e}")))?;
 
         let bus = EventBus::default();
 
@@ -184,7 +190,7 @@ impl AgentLoop {
 
         let loop_guard = LoopGuard::new(config.loop_guard_threshold);
 
-        Self {
+        Ok(Self {
             llm,
             fusion,
             octree,
@@ -198,7 +204,7 @@ impl AgentLoop {
             override_last_seen: None,
             paused: false,
             bus_rx,
-        }
+        })
     }
 
     // -------------------------------------------------------------------------
@@ -426,6 +432,7 @@ impl AgentLoop {
         // Hash the raw response and check for repetitive loops.
         let hash = Self::hash_str(&raw);
         if self.loop_guard.record(&hash.to_string()) {
+            warn!("LoopGuard: repetitive LLM output detected; human intervention required");
             return Err(MechError::LlmInferenceFailed(
                 "LoopGuard: repetitive LLM output detected; human intervention required"
                     .to_string(),
@@ -438,10 +445,13 @@ impl AgentLoop {
                 MechError::LlmInferenceFailed(format!("JSON parse error: {e}"))
             })?;
 
+        debug!(intent = ?intent, "LLM decided intent");
+
         // ── 4. Gatekeep ───────────────────────────────────────────────────────
         self.gate.authorize_and_verify("agent", &intent)?;
 
         // ── 5. Act ────────────────────────────────────────────────────────────
+        info!(intent = ?intent, "dispatching approved intent");
         let event = Event {
             id: Uuid::new_v4(),
             timestamp: chrono::Utc::now(),
@@ -501,9 +511,8 @@ impl AgentLoop {
                                 let linear_opt = json["msg"]["linear"]["x"].as_f64();
                                 let angular_opt = json["msg"]["angular"]["z"].as_f64();
                                 if linear_opt.is_none() || angular_opt.is_none() {
-                                    eprintln!(
-                                        "[mechos-runtime] dashboard_override: \
-                                         missing linear.x or angular.z in Twist frame"
+                                    warn!(
+                                        "dashboard_override: missing linear.x or angular.z in Twist frame"
                                     );
                                 }
                                 let linear = linear_opt.unwrap_or(0.0) as f32;
@@ -563,7 +572,7 @@ mod tests {
     use super::*;
 
     fn default_agent() -> AgentLoop {
-        AgentLoop::new(AgentLoopConfig::default())
+        AgentLoop::new(AgentLoopConfig::default()).expect("AgentLoop::new should not fail in tests")
     }
 
     #[test]

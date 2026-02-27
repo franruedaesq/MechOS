@@ -23,6 +23,7 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 use uuid::Uuid;
 use chrono::Utc;
+use tracing::{error, warn};
 
 use crate::bus::EventBus;
 
@@ -112,12 +113,12 @@ impl Ros2Bridge {
                     let bridge = self.clone();
                     tokio::spawn(async move {
                         if let Err(e) = bridge.handle_ws_client(stream, peer).await {
-                            eprintln!("[mechos-middleware] ws client {peer} error: {e}");
+                            error!(peer = %peer, error = %e, "ws client error");
                         }
                     });
                 }
                 Err(e) => {
-                    eprintln!("[mechos-middleware] ws accept error: {e}");
+                    error!(error = %e, "ws accept error");
                 }
             }
         }
@@ -149,7 +150,7 @@ impl Ros2Bridge {
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            eprintln!("[mechos-middleware] ws client {peer} lagged {n}");
+                            warn!(peer = %peer, lagged_by = n, "ws client lagged");
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
