@@ -80,6 +80,22 @@ pub enum EventPayload {
         /// The message content.
         message: String,
     },
+    /// Raw LiDAR scan data for the Cockpit Sensory Visualizer.
+    ///
+    /// `ranges` contains measured distances (metres) in the order produced by
+    /// the sensor; consecutive samples are separated by `angle_increment_rad`
+    /// starting from `angle_min_rad` (both in radians).
+    LidarScan {
+        ranges: Vec<f32>,
+        angle_min_rad: f32,
+        angle_increment_rad: f32,
+    },
+    /// Cockpit mode-toggle command sent by the human operator.
+    ///
+    /// When `paused` is `true` the [`AgentLoop`] suspends the autonomous OODA
+    /// cycle; `false` resumes it.  This is independent of the joystick
+    /// manual-override interlock.
+    AgentModeToggle { paused: bool },
 }
 
 /// Robot telemetry snapshot.
@@ -389,5 +405,50 @@ mod tests {
             details: "overcurrent".to_string(),
         };
         assert!(err2.to_string().contains("arm_joint_1"));
+    }
+
+    #[test]
+    fn lidar_scan_roundtrip() {
+        let payload = EventPayload::LidarScan {
+            ranges: vec![0.5, 1.0, 1.5, 2.0],
+            angle_min_rad: -1.5707963,
+            angle_increment_rad: 0.017453293,
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        let back: EventPayload = serde_json::from_str(&json).unwrap();
+        match back {
+            EventPayload::LidarScan {
+                ranges,
+                angle_min_rad,
+                angle_increment_rad,
+            } => {
+                assert_eq!(ranges.len(), 4);
+                assert!((angle_min_rad - (-1.5707963)).abs() < 1e-6);
+                assert!((angle_increment_rad - 0.017453293).abs() < 1e-9);
+            }
+            _ => panic!("expected LidarScan"),
+        }
+    }
+
+    #[test]
+    fn agent_mode_toggle_paused_roundtrip() {
+        let payload = EventPayload::AgentModeToggle { paused: true };
+        let json = serde_json::to_string(&payload).unwrap();
+        let back: EventPayload = serde_json::from_str(&json).unwrap();
+        assert!(
+            matches!(back, EventPayload::AgentModeToggle { paused: true }),
+            "AgentModeToggle(paused=true) must survive a JSON round-trip"
+        );
+    }
+
+    #[test]
+    fn agent_mode_toggle_resumed_roundtrip() {
+        let payload = EventPayload::AgentModeToggle { paused: false };
+        let json = serde_json::to_string(&payload).unwrap();
+        let back: EventPayload = serde_json::from_str(&json).unwrap();
+        assert!(
+            matches!(back, EventPayload::AgentModeToggle { paused: false }),
+            "AgentModeToggle(paused=false) must survive a JSON round-trip"
+        );
     }
 }

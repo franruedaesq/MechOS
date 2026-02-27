@@ -864,6 +864,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mechos-cockpit"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "futures-util",
+ "mechos-middleware",
+ "mechos-types",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "uuid",
+]
+
+[[package]]
 name = "mechos-hal"
 version = "0.1.0"
 dependencies = [

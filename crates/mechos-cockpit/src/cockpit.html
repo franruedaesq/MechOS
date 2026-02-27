@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MechOS Cockpit</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0d1117; --surface: #161b22; --border: #30363d; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922; --text: #c9d1d9;
+    --text-dim: #8b949e; --font: 'Segoe UI', system-ui, sans-serif;
+    --mono: 'Cascadia Code', 'Fira Code', 'Courier New', monospace;
+  }
+  body { background: var(--bg); color: var(--text); font-family: var(--font);
+         min-height: 100vh; display: flex; flex-direction: column; }
+  header { background: var(--surface); border-bottom: 1px solid var(--border);
+           padding: 0.5rem 1rem; display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  header h1 { font-size: 1.1rem; font-weight: 700; color: var(--accent); flex: 1; }
+  .status-badge { font-size: 0.75rem; padding: 0.25rem 0.6rem; border-radius: 999px;
+                  font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+  .badge-observing  { background: #1f3a5f; color: var(--accent); }
+  .badge-thinking   { background: #3a2f0a; color: var(--yellow); }
+  .badge-acting     { background: #1a3a1a; color: var(--green); }
+  .badge-suspended  { background: #3a1a1a; color: var(--red); }
+  .badge-paused     { background: #2d2d2d; color: var(--text-dim); }
+  .conn-indicator { display: flex; align-items: center; gap: 0.4rem; font-size: 0.8rem; }
+  .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
+  .conn-dot.connected { background: var(--green); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+  .btn { border: 1px solid var(--border); background: var(--surface); color: var(--text);
+         padding: 0.35rem 0.8rem; border-radius: 6px; cursor: pointer; font-size: 0.8rem;
+         font-family: var(--font); transition: background .15s; }
+  .btn:hover { background: #21262d; }
+  .btn.active { background: #1f3a5f; border-color: var(--accent); color: var(--accent); }
+  .btn.danger { border-color: var(--red); color: var(--red); }
+  .btn.danger.active { background: #3a1a1a; }
+  main { flex: 1; display: grid; padding: 0.75rem; gap: 0.75rem;
+         grid-template-columns: 1fr 1fr 1fr; grid-template-rows: auto 1fr; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+           display: flex; flex-direction: column; overflow: hidden; }
+  .panel-title { font-size: 0.75rem; font-weight: 700; padding: 0.5rem 0.75rem;
+                 border-bottom: 1px solid var(--border); color: var(--text-dim);
+                 text-transform: uppercase; letter-spacing: 0.08em; display: flex;
+                 align-items: center; justify-content: space-between; }
+  /* Sensory Visualizer */
+  #panel-sensor { grid-column: 1; grid-row: 1 / 3; }
+  #sensor-canvas { display: block; width: 100%; flex: 1; }
+  .sensor-info { padding: 0.4rem 0.75rem; font-size: 0.75rem; color: var(--text-dim);
+                 border-top: 1px solid var(--border); font-family: var(--mono); }
+  /* Brain Debugger */
+  #panel-brain { grid-column: 2; grid-row: 1 / 3; }
+  .brain-body { display: flex; flex-direction: column; flex: 1; overflow: hidden; }
+  .metrics-ribbon { display: flex; gap: 1rem; padding: 0.5rem 0.75rem;
+                    border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .metric { display: flex; flex-direction: column; }
+  .metric-label { font-size: 0.65rem; color: var(--text-dim); text-transform: uppercase;
+                  letter-spacing: 0.06em; }
+  .metric-value { font-size: 0.85rem; font-weight: 700; font-family: var(--mono); }
+  .feeds { display: flex; flex: 1; overflow: hidden; gap: 0; }
+  .feed { flex: 1; display: flex; flex-direction: column; overflow: hidden;
+          border-right: 1px solid var(--border); }
+  .feed:last-child { border-right: none; }
+  .feed-title { font-size: 0.65rem; color: var(--text-dim); padding: 0.3rem 0.5rem;
+                text-transform: uppercase; letter-spacing: 0.06em;
+                border-bottom: 1px solid var(--border); }
+  .feed-content { flex: 1; overflow-y: auto; padding: 0.4rem 0.5rem;
+                  font-family: var(--mono); font-size: 0.7rem; line-height: 1.4;
+                  color: var(--text-dim); word-break: break-all; }
+  .feed-content::-webkit-scrollbar { width: 4px; }
+  .feed-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .feed-entry { padding: 0.15rem 0; border-bottom: 1px solid #1a1f27; }
+  .feed-entry .ts { color: #444c56; }
+  .feed-entry .txt { color: var(--text); }
+  .feed-entry .txt.json { color: #a5d6ff; }
+  /* Teleoperation */
+  #panel-teleop { grid-column: 3; grid-row: 1; }
+  .teleop-body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.75rem; }
+  .wasd-grid { display: grid; grid-template-columns: repeat(3, 44px);
+               grid-template-rows: repeat(2, 44px); gap: 4px; justify-content: center; }
+  .wasd-key { border: 1px solid var(--border); border-radius: 6px; display: flex;
+              align-items: center; justify-content: center; font-size: 0.75rem;
+              font-weight: 700; color: var(--text-dim); background: var(--bg);
+              user-select: none; transition: background .1s, color .1s; cursor: pointer;
+              position: relative; }
+  .wasd-key.pressed { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .wasd-key.empty { visibility: hidden; }
+  .joystick-container { display: flex; flex-direction: column; align-items: center; gap: 0.4rem; }
+  #joystick-canvas { border-radius: 50%; border: 1px solid var(--border); cursor: grab;
+                     touch-action: none; background: var(--bg); }
+  #joystick-canvas:active { cursor: grabbing; }
+  .velocity-display { font-family: var(--mono); font-size: 0.72rem; color: var(--text-dim);
+                      text-align: center; }
+  .gamepad-info { font-size: 0.7rem; color: var(--text-dim); text-align: center; }
+  /* HITL Panel */
+  #panel-hitl { grid-column: 3; grid-row: 2; }
+  .hitl-body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; flex: 1; }
+  .hitl-empty { color: var(--text-dim); font-size: 0.8rem; }
+  /* HITL Modal overlay */
+  #hitl-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.75);
+                z-index: 100; align-items: center; justify-content: center; }
+  #hitl-modal.visible { display: flex; }
+  .modal-box { background: var(--surface); border: 1px solid var(--accent); border-radius: 12px;
+               padding: 1.5rem; max-width: 480px; width: 90%; display: flex;
+               flex-direction: column; gap: 1rem; }
+  .modal-box h2 { font-size: 1rem; color: var(--accent); }
+  .modal-question { font-size: 0.9rem; background: var(--bg); border-radius: 6px;
+                    padding: 0.75rem; border: 1px solid var(--border); }
+  .modal-context { font-size: 0.75rem; color: var(--text-dim); font-style: italic; }
+  .modal-input { background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+                 padding: 0.5rem 0.75rem; color: var(--text); font-size: 0.9rem;
+                 font-family: var(--font); width: 100%; outline: none; }
+  .modal-input:focus { border-color: var(--accent); }
+  .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+  /* Disconnected overlay */
+  #disconnected-banner { display: none; position: fixed; top: 0; left: 0; right: 0;
+                         background: #3a1a1a; border-bottom: 2px solid var(--red);
+                         padding: 0.5rem 1rem; text-align: center; font-size: 0.85rem;
+                         color: var(--red); z-index: 50; }
+  #disconnected-banner.visible { display: block; }
+  /* Responsive */
+  @media (max-width: 1100px) {
+    main { grid-template-columns: 1fr 1fr; grid-template-rows: auto auto 1fr; }
+    #panel-sensor { grid-column: 1; grid-row: 1; }
+    #panel-teleop  { grid-column: 2; grid-row: 1; }
+    #panel-brain   { grid-column: 1 / 3; grid-row: 2; }
+    #panel-hitl    { grid-column: 1 / 3; grid-row: 3; }
+  }
+  @media (max-width: 700px) {
+    main { grid-template-columns: 1fr; }
+    #panel-sensor, #panel-teleop, #panel-brain, #panel-hitl { grid-column: 1; grid-row: auto; }
+  }
+</style>
+</head>
+<body>
+
+<div id="disconnected-banner">⚠ Disconnected from MechOS – attempting to reconnect…</div>
+
+<header>
+  <h1>🤖 MechOS Cockpit</h1>
+  <span id="state-badge" class="status-badge badge-observing">Observing</span>
+  <span style="flex:1"></span>
+  <span id="battery" style="font-size:.8rem;font-family:var(--mono)">🔋 —%</span>
+  <button id="btn-pause" class="btn">⏸ Pause Agent</button>
+  <div class="conn-indicator">
+    <div id="conn-dot" class="conn-dot"></div>
+    <span id="conn-label">Disconnected</span>
+  </div>
+</header>
+
+<main>
+  <!-- Sensory Visualizer -->
+  <div class="panel" id="panel-sensor">
+    <div class="panel-title">
+      <span>📡 Sensory Visualizer</span>
+      <span id="lidar-count" style="font-size:.65rem;color:var(--text-dim)">0 pts</span>
+    </div>
+    <canvas id="sensor-canvas"></canvas>
+    <div class="sensor-info" id="sensor-info">X: — &nbsp; Y: — &nbsp; Heading: —°</div>
+  </div>
+
+  <!-- Brain Debugger -->
+  <div class="panel" id="panel-brain">
+    <div class="panel-title">🧠 Brain Debugger</div>
+    <div class="brain-body">
+      <div class="metrics-ribbon">
+        <div class="metric">
+          <span class="metric-label">State</span>
+          <span class="metric-value" id="met-state">—</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Inference</span>
+          <span class="metric-value" id="met-latency">—</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Last Action</span>
+          <span class="metric-value" id="met-action" style="color:var(--green)">—</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">Events/s</span>
+          <span class="metric-value" id="met-eps">0</span>
+        </div>
+      </div>
+      <div class="feeds">
+        <div class="feed">
+          <div class="feed-title">Context / Thoughts</div>
+          <div class="feed-content" id="feed-context"></div>
+        </div>
+        <div class="feed">
+          <div class="feed-title">Raw LLM Output</div>
+          <div class="feed-content" id="feed-output"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Teleoperation -->
+  <div class="panel" id="panel-teleop">
+    <div class="panel-title">🕹 Teleoperation</div>
+    <div class="teleop-body">
+      <div style="font-size:.72rem;color:var(--text-dim);text-align:center">
+        W-A-S-D / Arrow keys &nbsp;·&nbsp; Virtual joystick &nbsp;·&nbsp; Gamepad
+      </div>
+      <!-- WASD visual -->
+      <div class="wasd-grid">
+        <div class="wasd-key empty"></div>
+        <div class="wasd-key" id="key-w" data-key="KeyW">W</div>
+        <div class="wasd-key empty"></div>
+        <div class="wasd-key" id="key-a" data-key="KeyA">A</div>
+        <div class="wasd-key" id="key-s" data-key="KeyS">S</div>
+        <div class="wasd-key" id="key-d" data-key="KeyD">D</div>
+      </div>
+      <!-- Virtual joystick -->
+      <div class="joystick-container">
+        <canvas id="joystick-canvas" width="120" height="120"></canvas>
+        <div class="velocity-display" id="vel-display">Linear: 0.00 m/s &nbsp; Angular: 0.00 rad/s</div>
+      </div>
+      <div class="gamepad-info" id="gamepad-info">No gamepad detected</div>
+    </div>
+  </div>
+
+  <!-- HITL Panel -->
+  <div class="panel" id="panel-hitl">
+    <div class="panel-title">🙋 HITL Alerts</div>
+    <div class="hitl-body">
+      <div class="hitl-empty" id="hitl-empty">No pending questions from the robot.</div>
+      <div id="hitl-question" style="display:none;font-size:.85rem;padding:.5rem;background:var(--bg);border:1px solid var(--border);border-radius:6px"></div>
+      <div id="hitl-input-row" style="display:none;gap:.5rem">
+        <input id="hitl-input" type="text" placeholder="Type your answer…" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:.4rem .6rem;color:var(--text);font-family:var(--font);font-size:.85rem;outline:none"/>
+        <button class="btn" id="hitl-submit">Send</button>
+      </div>
+    </div>
+  </div>
+</main>
+
+<!-- HITL Modal -->
+<div id="hitl-modal">
+  <div class="modal-box">
+    <h2>🙋 Robot needs your help</h2>
+    <div class="modal-question" id="modal-question"></div>
+    <div class="modal-context" id="modal-context" style="display:none"></div>
+    <input id="modal-input" class="modal-input" type="text" placeholder="Type your answer and press Enter…" autocomplete="off"/>
+    <div class="modal-actions">
+      <button class="btn danger" id="modal-dismiss">Dismiss</button>
+      <button class="btn active" id="modal-submit">Send Answer</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+// ═══════════════════════════════════════════════════════════════════════════
+// Constants & state
+// ═══════════════════════════════════════════════════════════════════════════
+const WS_URL = `ws://${location.host}/ws`;
+const LINEAR_SPEED  = 0.5;  // m/s for WASD keys
+const ANGULAR_SPEED = 0.8;  // rad/s for WASD keys
+const DRIVE_HZ = 20;        // Hz – how often we send drive commands
+const SCALE = 80;           // pixels per metre on the sensor canvas
+
+let ws = null;
+let reconnectTimer = null;
+let agentPaused = false;
+let robotX = 0, robotY = 0, robotHeading = 0, battery = 0;
+let lidarRanges = [], lidarAngleMin = -Math.PI/2, lidarAngleIncrement = 0.017453;
+let keysDown = new Set();
+let joystickDragging = false;
+let joystickX = 0, joystickY = 0; // normalised [-1, 1]
+let gamepadIndex = -1;
+let currentState = 'Observing';
+let eventCount = 0, epsTimer = 0, epsDisplay = 0;
+let lastThinkTime = null;
+let teleopInterval = null;
+let pendingHITL = null;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WebSocket connection
+// ═══════════════════════════════════════════════════════════════════════════
+function connect() {
+  ws = new WebSocket(WS_URL);
+
+  ws.addEventListener('open', () => {
+    document.getElementById('conn-dot').classList.add('connected');
+    document.getElementById('conn-label').textContent = 'Connected';
+    document.getElementById('disconnected-banner').classList.remove('visible');
+  });
+
+  ws.addEventListener('close', () => {
+    document.getElementById('conn-dot').classList.remove('connected');
+    document.getElementById('conn-label').textContent = 'Disconnected';
+    document.getElementById('disconnected-banner').classList.add('visible');
+    scheduleReconnect();
+  });
+
+  ws.addEventListener('error', () => {
+    ws.close();
+  });
+
+  ws.addEventListener('message', (e) => {
+    eventCount++;
+    try {
+      const event = JSON.parse(e.data);
+      handleEvent(event);
+    } catch(_) {}
+  });
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, 2000);
+}
+
+function send(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Event handling (downstream: server → browser)
+// ═══════════════════════════════════════════════════════════════════════════
+function handleEvent(event) {
+  const payload = event.payload;
+  if (!payload) return;
+
+  if (payload.Telemetry) {
+    const t = payload.Telemetry;
+    robotX = t.position_x;
+    robotY = t.position_y;
+    robotHeading = t.heading_rad;
+    battery = t.battery_percent;
+    document.getElementById('battery').textContent = `🔋 ${battery}%`;
+    document.getElementById('sensor-info').textContent =
+      `X: ${robotX.toFixed(2)} m  Y: ${robotY.toFixed(2)} m  Heading: ${(robotHeading * 180/Math.PI).toFixed(1)}°`;
+    setState('Observing');
+    return;
+  }
+
+  if (payload.LidarScan) {
+    lidarRanges = payload.LidarScan.ranges;
+    lidarAngleMin = payload.LidarScan.angle_min_rad;
+    lidarAngleIncrement = payload.LidarScan.angle_increment_rad;
+    document.getElementById('lidar-count').textContent = `${lidarRanges.length} pts`;
+    return;
+  }
+
+  if (payload.AgentThought !== undefined) {
+    const thought = payload.AgentThought;
+    const src = event.source || '';
+
+    // Detect AskHuman intent published as AgentThought from dashboard adapter
+    try {
+      const parsed = JSON.parse(thought);
+      if (parsed.topic === '/hitl/ask_human' && parsed.msg && parsed.msg.question) {
+        showHITLModal(parsed.msg.question, parsed.msg.context_image_id || null);
+        setState('Suspended');
+        return;
+      }
+      // Drive override from kernel
+      if (parsed.topic === '/cmd_vel' && src.includes('manual_override')) {
+        setState('Suspended');
+        appendFeed('feed-context', `[OVERRIDE] Drive lin=${parsed.msg?.linear?.x} ang=${parsed.msg?.angular?.z}`);
+        return;
+      }
+      // Action command
+      if (parsed.topic === '/cmd_vel') {
+        setState('Acting');
+        const action = `Drive(lin=${parsed.msg?.linear?.x}, ang=${parsed.msg?.angular?.z})`;
+        document.getElementById('met-action').textContent = action;
+        appendFeed('feed-output', thought, true);
+        return;
+      }
+    } catch(_) {}
+
+    // Detect structured LLM output (HardwareIntent JSON)
+    try {
+      const parsed = JSON.parse(thought);
+      if (parsed.action) {
+        setState('Acting');
+        document.getElementById('met-action').textContent = parsed.action;
+        appendFeed('feed-output', thought, true);
+        if (lastThinkTime) {
+          const ms = Date.now() - lastThinkTime;
+          document.getElementById('met-latency').textContent = `${ms}ms`;
+        }
+        return;
+      }
+    } catch(_) {}
+
+    // Plain thought / system prompt → context feed
+    setState('Thinking');
+    lastThinkTime = Date.now();
+    appendFeed('feed-context', thought, false);
+    return;
+  }
+
+  if (payload.HumanResponse !== undefined) {
+    appendFeed('feed-context', `[Human] ${payload.HumanResponse}`);
+    setState('Thinking');
+    return;
+  }
+
+  if (payload.HardwareFault !== undefined) {
+    const f = payload.HardwareFault;
+    appendFeed('feed-context', `⚠ Fault on ${f.component} [${f.code}]: ${f.message}`);
+    setState('Suspended');
+    return;
+  }
+
+  if (payload.AgentModeToggle !== undefined) {
+    agentPaused = payload.AgentModeToggle.paused;
+    updatePauseButton();
+    if (agentPaused) setState('Paused');
+    return;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// State & UI helpers
+// ═══════════════════════════════════════════════════════════════════════════
+const STATE_CLASSES = {
+  Observing: 'badge-observing', Thinking: 'badge-thinking',
+  Acting: 'badge-acting', Suspended: 'badge-suspended', Paused: 'badge-paused'
+};
+
+function setState(state) {
+  if (agentPaused && state !== 'Paused') return;
+  currentState = state;
+  const badge = document.getElementById('state-badge');
+  badge.textContent = state;
+  badge.className = 'status-badge ' + (STATE_CLASSES[state] || 'badge-observing');
+  document.getElementById('met-state').textContent = state;
+}
+
+function appendFeed(feedId, text, isJson) {
+  const feed = document.getElementById(feedId);
+  const entry = document.createElement('div');
+  entry.className = 'feed-entry';
+  const ts = new Date().toTimeString().slice(0, 8);
+  let display = text.length > 300 ? text.slice(0, 300) + '…' : text;
+  entry.innerHTML = `<span class="ts">[${ts}]</span> <span class="txt${isJson ? ' json' : ''}">${escHtml(display)}</span>`;
+  feed.appendChild(entry);
+  // Keep only last 200 entries
+  while (feed.children.length > 200) feed.removeChild(feed.firstChild);
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Mode toggle (pause / resume)
+// ═══════════════════════════════════════════════════════════════════════════
+function updatePauseButton() {
+  const btn = document.getElementById('btn-pause');
+  if (agentPaused) {
+    btn.textContent = '▶ Resume Agent';
+    btn.classList.add('active');
+    setState('Paused');
+  } else {
+    btn.textContent = '⏸ Pause Agent';
+    btn.classList.remove('active');
+    setState('Observing');
+  }
+}
+
+document.getElementById('btn-pause').addEventListener('click', () => {
+  agentPaused = !agentPaused;
+  updatePauseButton();
+  send({ topic: '/agent/mode', msg: { paused: agentPaused } });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Teleoperation – WASD keyboard
+// ═══════════════════════════════════════════════════════════════════════════
+const KEY_MAP = {
+  'KeyW': [LINEAR_SPEED, 0], 'ArrowUp':    [LINEAR_SPEED, 0],
+  'KeyS': [-LINEAR_SPEED, 0],'ArrowDown':  [-LINEAR_SPEED, 0],
+  'KeyA': [0,  ANGULAR_SPEED],'ArrowLeft': [0,  ANGULAR_SPEED],
+  'KeyD': [0, -ANGULAR_SPEED],'ArrowRight': [0, -ANGULAR_SPEED],
+};
+
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  if (KEY_MAP[e.code]) {
+    e.preventDefault();
+    keysDown.add(e.code);
+    updateKeyVisuals();
+  }
+});
+
+document.addEventListener('keyup', (e) => {
+  keysDown.delete(e.code);
+  updateKeyVisuals();
+});
+
+function updateKeyVisuals() {
+  ['key-w','key-a','key-s','key-d'].forEach(id => {
+    const el = document.getElementById(id);
+    const code = el.dataset.key;
+    el.classList.toggle('pressed', keysDown.has(code));
+  });
+}
+
+function computeKeyVelocity() {
+  let linear = 0, angular = 0;
+  for (const code of keysDown) {
+    if (KEY_MAP[code]) {
+      linear  += KEY_MAP[code][0];
+      angular += KEY_MAP[code][1];
+    }
+  }
+  return [
+    Math.max(-1, Math.min(1, linear)),
+    Math.max(-1, Math.min(1, angular))
+  ];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Teleoperation – virtual joystick
+// ═══════════════════════════════════════════════════════════════════════════
+const jsCanvas = document.getElementById('joystick-canvas');
+const jsCtx = jsCanvas.getContext('2d');
+const jsR = jsCanvas.width / 2;  // outer radius
+const jsKnob = jsR * 0.35;       // knob radius
+
+function drawJoystick() {
+  jsCtx.clearRect(0, 0, jsCanvas.width, jsCanvas.height);
+  // Outer ring
+  jsCtx.beginPath();
+  jsCtx.arc(jsR, jsR, jsR - 4, 0, Math.PI * 2);
+  jsCtx.strokeStyle = '#30363d';
+  jsCtx.lineWidth = 2;
+  jsCtx.stroke();
+  // Cross-hair
+  jsCtx.strokeStyle = '#21262d';
+  jsCtx.lineWidth = 1;
+  jsCtx.beginPath(); jsCtx.moveTo(jsR, 4); jsCtx.lineTo(jsR, jsCanvas.height - 4); jsCtx.stroke();
+  jsCtx.beginPath(); jsCtx.moveTo(4, jsR); jsCtx.lineTo(jsCanvas.width - 4, jsR); jsCtx.stroke();
+  // Knob
+  const kx = jsR + joystickX * (jsR - jsKnob - 4);
+  const ky = jsR - joystickY * (jsR - jsKnob - 4);
+  jsCtx.beginPath();
+  jsCtx.arc(kx, ky, jsKnob, 0, Math.PI * 2);
+  jsCtx.fillStyle = joystickDragging ? '#58a6ff' : '#388bfd55';
+  jsCtx.fill();
+  jsCtx.strokeStyle = '#58a6ff';
+  jsCtx.lineWidth = 2;
+  jsCtx.stroke();
+}
+
+function joystickEventPos(e) {
+  const rect = jsCanvas.getBoundingClientRect();
+  const src = e.touches ? e.touches[0] : e;
+  return [(src.clientX - rect.left - jsR) / jsR, -(src.clientY - rect.top - jsR) / jsR];
+}
+
+function clampJoystick(x, y) {
+  const len = Math.sqrt(x*x + y*y);
+  if (len > 1) { x /= len; y /= len; }
+  return [x, y];
+}
+
+jsCanvas.addEventListener('mousedown', e => { joystickDragging = true; });
+jsCanvas.addEventListener('touchstart', e => { e.preventDefault(); joystickDragging = true; }, { passive: false });
+document.addEventListener('mousemove', e => {
+  if (!joystickDragging) return;
+  [joystickX, joystickY] = clampJoystick(...joystickEventPos(e));
+});
+document.addEventListener('touchmove', e => {
+  if (!joystickDragging) return;
+  e.preventDefault();
+  [joystickX, joystickY] = clampJoystick(...joystickEventPos(e));
+}, { passive: false });
+document.addEventListener('mouseup', () => { joystickDragging = false; joystickX = 0; joystickY = 0; });
+document.addEventListener('touchend', () => { joystickDragging = false; joystickX = 0; joystickY = 0; });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Teleoperation – Gamepad API
+// ═══════════════════════════════════════════════════════════════════════════
+window.addEventListener('gamepadconnected', e => {
+  gamepadIndex = e.gamepad.index;
+  document.getElementById('gamepad-info').textContent = `🎮 ${e.gamepad.id.slice(0, 30)}`;
+});
+window.addEventListener('gamepaddisconnected', () => {
+  gamepadIndex = -1;
+  document.getElementById('gamepad-info').textContent = 'No gamepad detected';
+});
+
+function readGamepad() {
+  if (gamepadIndex < 0) return [0, 0];
+  const gp = navigator.getGamepads()[gamepadIndex];
+  if (!gp) return [0, 0];
+  const dead = 0.1;
+  const linear  = Math.abs(gp.axes[1]) > dead ? -gp.axes[1] : 0;
+  const angular = Math.abs(gp.axes[0]) > dead ? -gp.axes[0] : 0;
+  return [linear * LINEAR_SPEED, angular * ANGULAR_SPEED];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Drive command sender
+// ═══════════════════════════════════════════════════════════════════════════
+function sendDrive(linear, angular) {
+  if (Math.abs(linear) < 0.001 && Math.abs(angular) < 0.001) return;
+  document.getElementById('vel-display').textContent =
+    `Linear: ${linear.toFixed(2)} m/s   Angular: ${angular.toFixed(2)} rad/s`;
+  send({
+    op: 'publish',
+    topic: '/cmd_vel',
+    source: 'dashboard_override',
+    msg: {
+      linear:  { x: parseFloat(linear.toFixed(3)),  y: 0, z: 0 },
+      angular: { x: 0, y: 0, z: parseFloat(angular.toFixed(3)) }
+    }
+  });
+}
+
+teleopInterval = setInterval(() => {
+  let [kLin, kAng] = computeKeyVelocity();
+  let [gpLin, gpAng] = readGamepad();
+  // Joystick: Y axis = forward/back, X axis = turn
+  const jsLin = joystickY * LINEAR_SPEED;
+  const jsAng = -joystickX * ANGULAR_SPEED;
+  // Priority: gamepad > keyboard > joystick
+  const linear  = gpLin  || kLin  || jsLin;
+  const angular = gpAng  || kAng  || jsAng;
+  if (Math.abs(linear) > 0.01 || Math.abs(angular) > 0.01) {
+    sendDrive(linear, angular);
+    setState('Suspended'); // teleop overrides AI
+  }
+}, 1000 / DRIVE_HZ);
+
+// WASD visual key click (mobile)
+document.querySelectorAll('.wasd-key:not(.empty)').forEach(el => {
+  el.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    keysDown.add(el.dataset.key);
+    updateKeyVisuals();
+  });
+  el.addEventListener('pointerup', e => {
+    e.preventDefault();
+    keysDown.delete(el.dataset.key);
+    updateKeyVisuals();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HITL – inline panel
+// ═══════════════════════════════════════════════════════════════════════════
+function showHITLModal(question, contextImageId) {
+  pendingHITL = question;
+  // Show modal
+  document.getElementById('modal-question').textContent = question;
+  const ctx = document.getElementById('modal-context');
+  if (contextImageId) {
+    ctx.textContent = `Context: frame ${contextImageId}`;
+    ctx.style.display = '';
+  } else {
+    ctx.style.display = 'none';
+  }
+  document.getElementById('modal-input').value = '';
+  document.getElementById('hitl-modal').classList.add('visible');
+  document.getElementById('modal-input').focus();
+  // Also update inline panel
+  document.getElementById('hitl-empty').style.display = 'none';
+  document.getElementById('hitl-question').style.display = '';
+  document.getElementById('hitl-input-row').style.display = 'flex';
+  document.getElementById('hitl-question').textContent = question;
+}
+
+function dismissHITL() {
+  document.getElementById('hitl-modal').classList.remove('visible');
+}
+
+function submitHITL(answer) {
+  if (!answer.trim()) return;
+  send({ op: 'publish', topic: '/hitl/human_response', msg: { response: answer.trim() } });
+  dismissHITL();
+  pendingHITL = null;
+  document.getElementById('hitl-empty').style.display = '';
+  document.getElementById('hitl-question').style.display = 'none';
+  document.getElementById('hitl-input-row').style.display = 'none';
+  appendFeed('feed-context', `[You → Robot] ${answer.trim()}`);
+  setState('Thinking');
+}
+
+document.getElementById('modal-submit').addEventListener('click', () => {
+  submitHITL(document.getElementById('modal-input').value);
+});
+document.getElementById('modal-dismiss').addEventListener('click', dismissHITL);
+document.getElementById('modal-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') submitHITL(e.target.value);
+  if (e.key === 'Escape') dismissHITL();
+});
+document.getElementById('hitl-submit').addEventListener('click', () => {
+  submitHITL(document.getElementById('hitl-input').value);
+  document.getElementById('hitl-input').value = '';
+});
+document.getElementById('hitl-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') {
+    submitHITL(e.target.value);
+    e.target.value = '';
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Sensory Visualizer – render loop
+// ═══════════════════════════════════════════════════════════════════════════
+const sCanvas = document.getElementById('sensor-canvas');
+const sCtx = sCanvas.getContext('2d');
+
+function resizeSensorCanvas() {
+  const panel = document.getElementById('panel-sensor');
+  const titleH = panel.querySelector('.panel-title').offsetHeight;
+  const infoH = document.getElementById('sensor-info').offsetHeight;
+  const h = panel.clientHeight - titleH - infoH;
+  sCanvas.width  = panel.clientWidth;
+  sCanvas.height = Math.max(h, 200);
+}
+
+function renderSensor() {
+  resizeSensorCanvas();
+  const w = sCanvas.width, h = sCanvas.height;
+  sCtx.fillStyle = '#0d1117';
+  sCtx.fillRect(0, 0, w, h);
+
+  // Grid
+  sCtx.strokeStyle = '#1a1f27';
+  sCtx.lineWidth = 1;
+  const gridStep = SCALE; // 1 m grid
+  const cx = w / 2 - robotX * SCALE;
+  const cy = h / 2 + robotY * SCALE;
+  for (let gx = ((cx % gridStep) + gridStep) % gridStep; gx < w; gx += gridStep) {
+    sCtx.beginPath(); sCtx.moveTo(gx, 0); sCtx.lineTo(gx, h); sCtx.stroke();
+  }
+  for (let gy = ((cy % gridStep) + gridStep) % gridStep; gy < h; gy += gridStep) {
+    sCtx.beginPath(); sCtx.moveTo(0, gy); sCtx.lineTo(w, gy); sCtx.stroke();
+  }
+
+  const RX = w / 2, RY = h / 2; // robot always at centre
+
+  // LiDAR points
+  if (lidarRanges.length > 0) {
+    sCtx.fillStyle = '#f8514966';
+    for (let i = 0; i < lidarRanges.length; i++) {
+      const r = lidarRanges[i];
+      if (!isFinite(r) || r <= 0 || r > 20) continue;
+      const angle = lidarAngleMin + i * lidarAngleIncrement + robotHeading;
+      const px = RX + r * Math.cos(angle) * SCALE;
+      const py = RY - r * Math.sin(angle) * SCALE;
+      sCtx.beginPath();
+      sCtx.arc(px, py, 2, 0, Math.PI * 2);
+      sCtx.fill();
+    }
+  }
+
+  // Robot avatar (filled triangle pointing in heading direction)
+  const size = 12;
+  sCtx.save();
+  sCtx.translate(RX, RY);
+  sCtx.rotate(-robotHeading);
+  sCtx.beginPath();
+  sCtx.moveTo(0, -size);
+  sCtx.lineTo(size * 0.6, size * 0.6);
+  sCtx.lineTo(0, size * 0.3);
+  sCtx.lineTo(-size * 0.6, size * 0.6);
+  sCtx.closePath();
+  sCtx.fillStyle = '#58a6ff';
+  sCtx.fill();
+  sCtx.strokeStyle = '#fff';
+  sCtx.lineWidth = 1;
+  sCtx.stroke();
+  sCtx.restore();
+
+  // Origin dot
+  sCtx.beginPath();
+  sCtx.arc(cx, cy, 3, 0, Math.PI * 2);
+  sCtx.fillStyle = '#3fb95066';
+  sCtx.fill();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Events/sec metric
+// ═══════════════════════════════════════════════════════════════════════════
+setInterval(() => {
+  epsDisplay = eventCount;
+  eventCount = 0;
+  document.getElementById('met-eps').textContent = epsDisplay;
+}, 1000);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Animation loop (60 FPS)
+// ═══════════════════════════════════════════════════════════════════════════
+function loop() {
+  renderSensor();
+  drawJoystick();
+  requestAnimationFrame(loop);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Boot
+// ═══════════════════════════════════════════════════════════════════════════
+connect();
+loop();
+</script>
+</body>
+</html>
