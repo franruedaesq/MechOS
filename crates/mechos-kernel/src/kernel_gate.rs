@@ -77,6 +77,9 @@ impl KernelGate {
     /// | `Drive` | `HardwareInvoke("drive_base")` |
     /// | `TriggerRelay { relay_id, .. }` | `HardwareInvoke(relay_id)` |
     /// | `AskHuman { .. }` | `HardwareInvoke("hitl")` |
+    /// | `MessagePeer { .. }` | `FleetCommunicate` |
+    /// | `BroadcastFleet { .. }` | `FleetCommunicate` |
+    /// | `PostTask { .. }` | `TaskBoardAccess` |
     ///
     /// # Errors
     ///
@@ -104,6 +107,10 @@ impl KernelGate {
                 Capability::HardwareInvoke(relay_id.clone())
             }
             HardwareIntent::AskHuman { .. } => Capability::HardwareInvoke("hitl".to_string()),
+            HardwareIntent::MessagePeer { .. } | HardwareIntent::BroadcastFleet { .. } => {
+                Capability::FleetCommunicate
+            }
+            HardwareIntent::PostTask { .. } => Capability::TaskBoardAccess,
         }
     }
 }
@@ -246,5 +253,79 @@ mod tests {
                 }
             )
             .is_ok());
+    }
+
+    #[test]
+    fn broadcast_fleet_requires_fleet_communicate_capability() {
+        let mut caps = CapabilityManager::new();
+        caps.grant("runtime", Capability::FleetCommunicate);
+
+        let gate = KernelGate::new(caps, StateVerifier::new());
+
+        assert!(gate
+            .authorize_and_verify(
+                "runtime",
+                &HardwareIntent::BroadcastFleet {
+                    message: "I am at X:5, Y:5.".to_string(),
+                }
+            )
+            .is_ok());
+
+        // Missing capability → denied.
+        assert!(gate
+            .authorize_and_verify(
+                "unknown",
+                &HardwareIntent::BroadcastFleet {
+                    message: "Hello fleet.".to_string(),
+                }
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn message_peer_requires_fleet_communicate_capability() {
+        let mut caps = CapabilityManager::new();
+        caps.grant("runtime", Capability::FleetCommunicate);
+
+        let gate = KernelGate::new(caps, StateVerifier::new());
+
+        assert!(gate
+            .authorize_and_verify(
+                "runtime",
+                &HardwareIntent::MessagePeer {
+                    target_robot_id: "robot_bravo".to_string(),
+                    message: "Need help.".to_string(),
+                }
+            )
+            .is_ok());
+    }
+
+    #[test]
+    fn post_task_requires_task_board_access_capability() {
+        let mut caps = CapabilityManager::new();
+        caps.grant("runtime", Capability::TaskBoardAccess);
+
+        let gate = KernelGate::new(caps, StateVerifier::new());
+
+        assert!(gate
+            .authorize_and_verify(
+                "runtime",
+                &HardwareIntent::PostTask {
+                    title: "Move Box 1".to_string(),
+                    description: "Move red box.".to_string(),
+                }
+            )
+            .is_ok());
+
+        // Missing capability → denied.
+        assert!(gate
+            .authorize_and_verify(
+                "unknown",
+                &HardwareIntent::PostTask {
+                    title: "Task".to_string(),
+                    description: "desc".to_string(),
+                }
+            )
+            .is_err());
     }
 }

@@ -65,6 +65,28 @@ impl Ros2Adapter {
         };
         self.bus.publish(event)
     }
+
+    /// Ingest a fleet broadcast message arriving on `/fleet/communications` and
+    /// publish it as a [`EventPayload::PeerMessage`] event on the internal bus.
+    ///
+    /// `from_robot_id` identifies the sender; `message` is the raw string
+    /// payload that was carried inside the `std_msgs/msg/String` JSON frame.
+    pub fn ingest_fleet_message(
+        &self,
+        from_robot_id: &str,
+        message: &str,
+    ) -> Result<usize, MechError> {
+        let event = Event {
+            id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            source: "mechos-middleware::ros2/fleet/communications".to_string(),
+            payload: EventPayload::PeerMessage {
+                from_robot_id: from_robot_id.to_string(),
+                message: message.to_string(),
+            },
+        };
+        self.bus.publish(event)
+    }
 }
 
 #[async_trait]
@@ -144,6 +166,63 @@ impl MechAdapter for Ros2Adapter {
                     timestamp: Utc::now(),
                     source: "mechos-middleware::ros2/ask_human".to_string(),
                     payload: EventPayload::AgentThought(question.clone()),
+                };
+                self.bus.publish(event).map(|_| ())
+            }
+            HardwareIntent::MessagePeer {
+                target_robot_id,
+                message,
+            } => {
+                // Package as a std_msgs/msg/String JSON frame and publish to
+                // the peer's dedicated topic.
+                let peer_msg = json!({
+                    "op": "publish",
+                    "topic": format!("/fleet/robot/{target_robot_id}/inbox"),
+                    "msg": { "data": message }
+                });
+                let event = Event {
+                    id: Uuid::new_v4(),
+                    timestamp: Utc::now(),
+                    source: format!(
+                        "mechos-middleware::ros2/fleet/robot/{target_robot_id}/inbox"
+                    ),
+                    payload: EventPayload::AgentThought(peer_msg.to_string()),
+                };
+                self.bus.publish(event).map(|_| ())
+            }
+            HardwareIntent::BroadcastFleet { message } => {
+                // Package as a std_msgs/msg/String JSON frame on /fleet/communications.
+                let broadcast_msg = json!({
+                    "op": "publish",
+                    "topic": "/fleet/communications",
+                    "msg": { "data": message }
+                });
+                let event = Event {
+                    id: Uuid::new_v4(),
+                    timestamp: Utc::now(),
+                    source: "mechos-middleware::ros2/fleet/communications".to_string(),
+                    payload: EventPayload::AgentThought(broadcast_msg.to_string()),
+                };
+                self.bus.publish(event).map(|_| ())
+            }
+            HardwareIntent::PostTask { title, description } => {
+                // Publish the task intent to the fleet task topic so remote
+                // robots (and the task board consumer) can process it.
+                let task_msg = json!({
+                    "op": "publish",
+                    "topic": "/fleet/tasks",
+                    "msg": {
+                        "data": serde_json::to_string(&json!({
+                            "title": title,
+                            "description": description
+                        })).unwrap_or_default()
+                    }
+                });
+                let event = Event {
+                    id: Uuid::new_v4(),
+                    timestamp: Utc::now(),
+                    source: "mechos-middleware::ros2/fleet/tasks".to_string(),
+                    payload: EventPayload::AgentThought(task_msg.to_string()),
                 };
                 self.bus.publish(event).map(|_| ())
             }
@@ -247,6 +326,98 @@ mod tests {
         assert_eq!(event.source, "mechos-middleware::ros2/ask_human");
         if let EventPayload::AgentThought(q) = event.payload {
             assert_eq!(q, "Which shelf?");
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_broadcast_fleet_publishes_to_fleet_communications() {
+        let (bus, adapter) = make_adapter();
+        let mut rx = bus.subscribe();
+
+        adapter
+            .execute_intent(HardwareIntent::BroadcastFleet {
+                message: "I am at the Kitchen Door (X:5, Y:5).".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let event = rx.recv().await.unwrap();
+        assert_eq!(
+            event.source,
+            "mechos-middleware::ros2/fleet/communications"
+        );
+        if let EventPayload::AgentThought(json_str) = event.payload {
+            assert!(json_str.contains("/fleet/communications"));
+            assert!(json_str.contains("Kitchen Door"));
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_message_peer_publishes_to_peer_inbox() {
+        let (bus, adapter) = make_adapter();
+        let mut rx = bus.subscribe();
+
+        adapter
+            .execute_intent(HardwareIntent::MessagePeer {
+                target_robot_id: "robot_bravo".to_string(),
+                message: "I need help at X:5, Y:5.".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let event = rx.recv().await.unwrap();
+        assert!(event
+            .source
+            .contains("mechos-middleware::ros2/fleet/robot/robot_bravo"));
+        if let EventPayload::AgentThought(json_str) = event.payload {
+            assert!(json_str.contains("robot_bravo"));
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_post_task_publishes_to_fleet_tasks() {
+        let (bus, adapter) = make_adapter();
+        let mut rx = bus.subscribe();
+
+        adapter
+            .execute_intent(HardwareIntent::PostTask {
+                title: "Move Box 1".to_string(),
+                description: "Move the red box from shelf A to shelf B.".to_string(),
+            })
+            .await
+            .unwrap();
+
+        let event = rx.recv().await.unwrap();
+        assert_eq!(event.source, "mechos-middleware::ros2/fleet/tasks");
+        if let EventPayload::AgentThought(json_str) = event.payload {
+            assert!(json_str.contains("/fleet/tasks"));
+            assert!(json_str.contains("Move Box 1"));
+        }
+    }
+
+    #[tokio::test]
+    async fn ingest_fleet_message_publishes_peer_message() {
+        let (bus, adapter) = make_adapter();
+        let mut rx = bus.subscribe();
+
+        adapter
+            .ingest_fleet_message("robot_alpha", "I am through. Thank you.")
+            .unwrap();
+
+        let event = rx.recv().await.unwrap();
+        assert_eq!(
+            event.source,
+            "mechos-middleware::ros2/fleet/communications"
+        );
+        if let EventPayload::PeerMessage {
+            from_robot_id,
+            message,
+        } = event.payload
+        {
+            assert_eq!(from_robot_id, "robot_alpha");
+            assert_eq!(message, "I am through. Thank you.");
+        } else {
+            panic!("expected PeerMessage payload");
         }
     }
 }

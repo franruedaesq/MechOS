@@ -116,6 +116,15 @@ impl HardwareRegistry {
             // the EventBus upstream; no physical actuator is commanded.
             // ----------------------------------------------------------------
             HardwareIntent::AskHuman { .. } => Ok(()),
+
+            // ----------------------------------------------------------------
+            // Fleet communication intents are handled by the middleware layer
+            // (Ros2Adapter / DashboardSimAdapter); no physical actuator is
+            // involved at the HAL level.
+            // ----------------------------------------------------------------
+            HardwareIntent::MessagePeer { .. }
+            | HardwareIntent::BroadcastFleet { .. }
+            | HardwareIntent::PostTask { .. } => Ok(()),
         }
     }
 

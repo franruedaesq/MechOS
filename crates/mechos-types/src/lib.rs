@@ -15,6 +15,10 @@ pub enum Capability {
     ModelInference,
     /// Permission to access the persistent memory vector store
     MemoryAccess(String),
+    /// Permission to send and receive messages over the fleet network
+    FleetCommunicate,
+    /// Permission to read from and write to the shared Fleet Task Board
+    TaskBoardAccess,
 }
 
 /// Strict definition of physical actions the LLM is allowed to request.
@@ -37,6 +41,12 @@ pub enum HardwareIntent {
         question: String,
         context_image_id: Option<String>,
     },
+    /// Send a direct message/request to another specific robot.
+    MessagePeer { target_robot_id: String, message: String },
+    /// Broadcast a state or discovery message to the entire fleet.
+    BroadcastFleet { message: String },
+    /// Post a task to the shared Fleet Task Board.
+    PostTask { title: String, description: String },
 }
 
 /// Unified event wrapper for the headless event bus.
@@ -63,6 +73,13 @@ pub enum EventPayload {
     /// A human operator's response to an [`HardwareIntent::AskHuman`] prompt,
     /// injected from the monitoring dashboard via the WebSocket API.
     HumanResponse(String),
+    /// A message received from a peer robot over the fleet network.
+    PeerMessage {
+        /// The robot ID that sent the message.
+        from_robot_id: String,
+        /// The message content.
+        message: String,
+    },
 }
 
 /// Robot telemetry snapshot.
@@ -94,6 +111,8 @@ pub fn required_capabilities() -> Vec<Capability> {
         Capability::HardwareInvoke("arm_joint_1".to_string()),
         Capability::SensorRead("lidar/scan".to_string()),
         Capability::SensorRead("camera/rgb".to_string()),
+        Capability::FleetCommunicate,
+        Capability::TaskBoardAccess,
     ]
 }
 
@@ -210,6 +229,9 @@ mod tests {
         assert!(json.contains("Drive"));
         assert!(json.contains("TriggerRelay"));
         assert!(json.contains("AskHuman"));
+        assert!(json.contains("MessagePeer"));
+        assert!(json.contains("BroadcastFleet"));
+        assert!(json.contains("PostTask"));
     }
 
     #[test]
@@ -250,6 +272,100 @@ mod tests {
             caps.contains(&Capability::SensorRead("camera/rgb".to_string())),
             "camera/rgb SensorRead must be present"
         );
+        assert!(
+            caps.contains(&Capability::FleetCommunicate),
+            "FleetCommunicate must be present"
+        );
+        assert!(
+            caps.contains(&Capability::TaskBoardAccess),
+            "TaskBoardAccess must be present"
+        );
+    }
+
+    #[test]
+    fn hardware_intent_message_peer_roundtrip() {
+        let intent = HardwareIntent::MessagePeer {
+            target_robot_id: "robot_bravo".to_string(),
+            message: "I need help at X:5, Y:5.".to_string(),
+        };
+        let json = serde_json::to_string(&intent).unwrap();
+        let back: HardwareIntent = serde_json::from_str(&json).unwrap();
+        match back {
+            HardwareIntent::MessagePeer {
+                target_robot_id,
+                message,
+            } => {
+                assert_eq!(target_robot_id, "robot_bravo");
+                assert_eq!(message, "I need help at X:5, Y:5.");
+            }
+            _ => panic!("unexpected variant"),
+        }
+    }
+
+    #[test]
+    fn hardware_intent_broadcast_fleet_roundtrip() {
+        let intent = HardwareIntent::BroadcastFleet {
+            message: "I am at the Kitchen Door (X:5, Y:5).".to_string(),
+        };
+        let json = serde_json::to_string(&intent).unwrap();
+        let back: HardwareIntent = serde_json::from_str(&json).unwrap();
+        match back {
+            HardwareIntent::BroadcastFleet { message } => {
+                assert_eq!(message, "I am at the Kitchen Door (X:5, Y:5).");
+            }
+            _ => panic!("unexpected variant"),
+        }
+    }
+
+    #[test]
+    fn hardware_intent_post_task_roundtrip() {
+        let intent = HardwareIntent::PostTask {
+            title: "Move Box 1".to_string(),
+            description: "Move the red box from shelf A to shelf B.".to_string(),
+        };
+        let json = serde_json::to_string(&intent).unwrap();
+        let back: HardwareIntent = serde_json::from_str(&json).unwrap();
+        match back {
+            HardwareIntent::PostTask { title, description } => {
+                assert_eq!(title, "Move Box 1");
+                assert_eq!(description, "Move the red box from shelf A to shelf B.");
+            }
+            _ => panic!("unexpected variant"),
+        }
+    }
+
+    #[test]
+    fn peer_message_event_roundtrip() {
+        let payload = EventPayload::PeerMessage {
+            from_robot_id: "robot_alpha".to_string(),
+            message: "I am through. Thank you.".to_string(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        let back: EventPayload = serde_json::from_str(&json).unwrap();
+        assert!(
+            matches!(
+                back,
+                EventPayload::PeerMessage { ref from_robot_id, ref message }
+                    if from_robot_id == "robot_alpha" && message == "I am through. Thank you."
+            ),
+            "PeerMessage must survive a JSON round-trip"
+        );
+    }
+
+    #[test]
+    fn fleet_communicate_capability_roundtrip() {
+        let cap = Capability::FleetCommunicate;
+        let json = serde_json::to_string(&cap).unwrap();
+        let back: Capability = serde_json::from_str(&json).unwrap();
+        assert_eq!(cap, back);
+    }
+
+    #[test]
+    fn task_board_access_capability_roundtrip() {
+        let cap = Capability::TaskBoardAccess;
+        let json = serde_json::to_string(&cap).unwrap();
+        let back: Capability = serde_json::from_str(&json).unwrap();
+        assert_eq!(cap, back);
     }
 
     #[test]
