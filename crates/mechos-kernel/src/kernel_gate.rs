@@ -10,7 +10,7 @@
 //!    a [`MechError::Unauthorized`] response.
 //!
 //! 2. **Physical invariant check** ([`StateVerifier`]): the intent values must
-//!    satisfy every registered [`Rule`] (e.g. speed caps, joint limits).  The
+//!    satisfy every registered [`Rule`] (e.g. speed caps, workspace bounds).  The
 //!    first violated rule returns a [`MechError::HardwareFault`].
 //!
 //! Only when both checks pass is the caller permitted to forward the intent to
@@ -73,10 +73,10 @@ impl KernelGate {
     ///
     /// | Intent | Required [`Capability`] |
     /// |--------|------------------------|
+    /// | `MoveEndEffector { .. }` | `HardwareInvoke("end_effector")` |
     /// | `Drive` | `HardwareInvoke("drive_base")` |
-    /// | `ActuateJoint { joint_id, .. }` | `HardwareInvoke(joint_id)` |
     /// | `TriggerRelay { relay_id, .. }` | `HardwareInvoke(relay_id)` |
-    /// | `EmergencyStop` | `HardwareInvoke("emergency_stop")` |
+    /// | `AskHuman { .. }` | `HardwareInvoke("hitl")` |
     ///
     /// # Errors
     ///
@@ -96,16 +96,14 @@ impl KernelGate {
     /// Map a [`HardwareIntent`] to the [`Capability`] the agent must hold.
     fn capability_for(intent: &HardwareIntent) -> Capability {
         match intent {
-            HardwareIntent::Drive { .. } => Capability::HardwareInvoke("drive_base".to_string()),
-            HardwareIntent::ActuateJoint { joint_id, .. } => {
-                Capability::HardwareInvoke(joint_id.clone())
+            HardwareIntent::MoveEndEffector { .. } => {
+                Capability::HardwareInvoke("end_effector".to_string())
             }
+            HardwareIntent::Drive { .. } => Capability::HardwareInvoke("drive_base".to_string()),
             HardwareIntent::TriggerRelay { relay_id, .. } => {
                 Capability::HardwareInvoke(relay_id.clone())
             }
-            HardwareIntent::EmergencyStop => {
-                Capability::HardwareInvoke("emergency_stop".to_string())
-            }
+            HardwareIntent::AskHuman { .. } => Capability::HardwareInvoke("hitl".to_string()),
         }
     }
 }
@@ -184,30 +182,31 @@ mod tests {
     }
 
     #[test]
-    fn joint_intent_requires_joint_capability() {
+    fn end_effector_intent_requires_end_effector_capability() {
         let mut caps = CapabilityManager::new();
-        caps.grant("runtime", Capability::HardwareInvoke("arm_joint_1".into()));
+        caps.grant("runtime", Capability::HardwareInvoke("end_effector".into()));
 
         let gate = KernelGate::new(caps, StateVerifier::new());
 
-        // Correct joint → allowed.
         assert!(gate
             .authorize_and_verify(
                 "runtime",
-                &HardwareIntent::ActuateJoint {
-                    joint_id: "arm_joint_1".into(),
-                    target_angle_rad: 0.5,
+                &HardwareIntent::MoveEndEffector {
+                    x: 0.1,
+                    y: 0.2,
+                    z: 0.5,
                 }
             )
             .is_ok());
 
-        // Different joint → denied.
+        // Missing capability → denied.
         assert!(gate
             .authorize_and_verify(
-                "runtime",
-                &HardwareIntent::ActuateJoint {
-                    joint_id: "arm_joint_2".into(),
-                    target_angle_rad: 0.5,
+                "unknown",
+                &HardwareIntent::MoveEndEffector {
+                    x: 0.1,
+                    y: 0.2,
+                    z: 0.5,
                 }
             )
             .is_err());
@@ -232,17 +231,20 @@ mod tests {
     }
 
     #[test]
-    fn emergency_stop_requires_emergency_stop_capability() {
+    fn ask_human_requires_hitl_capability() {
         let mut caps = CapabilityManager::new();
-        caps.grant(
-            "runtime",
-            Capability::HardwareInvoke("emergency_stop".into()),
-        );
+        caps.grant("runtime", Capability::HardwareInvoke("hitl".into()));
 
         let gate = KernelGate::new(caps, StateVerifier::new());
 
         assert!(gate
-            .authorize_and_verify("runtime", &HardwareIntent::EmergencyStop)
+            .authorize_and_verify(
+                "runtime",
+                &HardwareIntent::AskHuman {
+                    question: "Which path is safe?".to_string(),
+                    context_image_id: None,
+                }
+            )
             .is_ok());
     }
 }
