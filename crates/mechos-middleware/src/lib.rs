@@ -24,7 +24,7 @@ pub mod ros2_adapter;
 pub mod ros2_bridge;
 
 pub use adapter::MechAdapter;
-pub use bus::{EventBus, TopicSubscriber};
+pub use bus::{EventBus, Topic, TopicReceiver, TopicSubscriber};
 pub use dashboard_sim_adapter::DashboardSimAdapter;
 pub use ros2_adapter::Ros2Adapter;
 pub use ros2_bridge::Ros2Bridge;
