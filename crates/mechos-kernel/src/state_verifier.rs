@@ -12,6 +12,10 @@
 //!   place the end-effector outside its safe cubic workspace.
 
 use mechos_types::{HardwareIntent, MechError};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 // ────────────────────────────────────────────────────────────────────────────
 // Rule trait
@@ -170,9 +174,75 @@ impl Rule for EndEffectorWorkspaceRule {
     }
 }
 
+/// Safety interlock that blocks AI-issued [`HardwareIntent::Drive`] commands
+/// while a manual dashboard override session is active.
+///
+/// The interlock is armed and disarmed through the shared `active` flag.  When
+/// the flag is `true` (the human operator has grabbed the on-screen joystick),
+/// any AI-sourced `Drive` command is rejected so the LLM cannot fight the
+/// human for control of the motors.  All other intent variants pass through
+/// unaffected.
+///
+/// # Example
+///
+/// ```
+/// use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+/// use mechos_kernel::{ManualOverrideInterlock, StateVerifier};
+/// use mechos_types::HardwareIntent;
+///
+/// let flag = Arc::new(AtomicBool::new(false));
+/// let mut verifier = StateVerifier::new();
+/// verifier.add_rule(Box::new(ManualOverrideInterlock::new(Arc::clone(&flag))));
+///
+/// // Override not active – Drive passes.
+/// assert!(verifier.verify(&HardwareIntent::Drive {
+///     linear_velocity: 0.5, angular_velocity: 0.0,
+/// }).is_ok());
+///
+/// // Arm the interlock.
+/// flag.store(true, Ordering::Release);
+///
+/// // Override active – Drive is rejected.
+/// assert!(verifier.verify(&HardwareIntent::Drive {
+///     linear_velocity: 0.5, angular_velocity: 0.0,
+/// }).is_err());
+/// ```
+pub struct ManualOverrideInterlock {
+    /// `true` while a dashboard manual-override session is active.
+    pub active: Arc<AtomicBool>,
+}
+
+impl ManualOverrideInterlock {
+    /// Create a new interlock that shares the given `active` flag.
+    pub fn new(active: Arc<AtomicBool>) -> Self {
+        Self { active }
+    }
+}
+
+impl Rule for ManualOverrideInterlock {
+    fn name(&self) -> &str {
+        "manual_override_interlock"
+    }
+
+    /// Reject any [`HardwareIntent::Drive`] command while the override flag is
+    /// set.  All other intent variants always pass this rule.
+    fn check(&self, intent: &HardwareIntent) -> Result<(), MechError> {
+        if self.active.load(Ordering::Acquire) {
+            if let HardwareIntent::Drive { .. } = intent {
+                return Err(MechError::HardwareFault {
+                    component: "drive_base".to_string(),
+                    details: "manual override active; AI drive commands suspended".to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::Ordering;
 
     // ------------------------------------------------------------------ helpers
     fn speed_verifier(max_linear: f32, max_angular: f32) -> StateVerifier {
@@ -391,6 +461,73 @@ mod tests {
             .verify(&HardwareIntent::AskHuman {
                 question: "What should I do?".to_string(),
                 context_image_id: None,
+            })
+            .is_ok());
+    }
+
+    // ------------------------------------------------------------------ ManualOverrideInterlock
+
+    fn override_verifier(active: Arc<AtomicBool>) -> StateVerifier {
+        let mut v = StateVerifier::new();
+        v.add_rule(Box::new(ManualOverrideInterlock::new(active)));
+        v
+    }
+
+    #[test]
+    fn drive_passes_when_override_not_active() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let v = override_verifier(Arc::clone(&flag));
+        assert!(v
+            .verify(&HardwareIntent::Drive {
+                linear_velocity: 0.5,
+                angular_velocity: 0.0,
+            })
+            .is_ok());
+    }
+
+    #[test]
+    fn drive_rejected_when_override_active() {
+        let flag = Arc::new(AtomicBool::new(true));
+        let v = override_verifier(Arc::clone(&flag));
+        assert!(matches!(
+            v.verify(&HardwareIntent::Drive {
+                linear_velocity: 0.5,
+                angular_velocity: 0.0,
+            }),
+            Err(MechError::HardwareFault { ref details, .. })
+                if details.contains("manual override active")
+        ));
+    }
+
+    #[test]
+    fn ask_human_passes_when_override_active() {
+        let flag = Arc::new(AtomicBool::new(true));
+        let v = override_verifier(Arc::clone(&flag));
+        assert!(v
+            .verify(&HardwareIntent::AskHuman {
+                question: "Override active – what should I do?".to_string(),
+                context_image_id: None,
+            })
+            .is_ok());
+    }
+
+    #[test]
+    fn override_interlock_cleared_when_flag_reset() {
+        let flag = Arc::new(AtomicBool::new(true));
+        let v = override_verifier(Arc::clone(&flag));
+        // Active: Drive is blocked.
+        assert!(v
+            .verify(&HardwareIntent::Drive {
+                linear_velocity: 0.3,
+                angular_velocity: 0.0,
+            })
+            .is_err());
+        // Clear the flag – Drive should pass again.
+        flag.store(false, Ordering::Release);
+        assert!(v
+            .verify(&HardwareIntent::Drive {
+                linear_velocity: 0.3,
+                angular_velocity: 0.0,
             })
             .is_ok());
     }

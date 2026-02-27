@@ -60,6 +60,9 @@ pub enum EventPayload {
     },
     /// The LLM's internal reasoning output
     AgentThought(String),
+    /// A human operator's response to an [`HardwareIntent::AskHuman`] prompt,
+    /// injected from the monitoring dashboard via the WebSocket API.
+    HumanResponse(String),
 }
 
 /// Robot telemetry snapshot.
@@ -246,6 +249,17 @@ mod tests {
         assert!(
             caps.contains(&Capability::SensorRead("camera/rgb".to_string())),
             "camera/rgb SensorRead must be present"
+        );
+    }
+
+    #[test]
+    fn human_response_roundtrip() {
+        let payload = EventPayload::HumanResponse("Yes, push it".to_string());
+        let json = serde_json::to_string(&payload).unwrap();
+        let back: EventPayload = serde_json::from_str(&json).unwrap();
+        assert!(
+            matches!(back, EventPayload::HumanResponse(ref s) if s == "Yes, push it"),
+            "HumanResponse must survive a JSON round-trip"
         );
     }
 
