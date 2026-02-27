@@ -17,15 +17,19 @@
 //!   LLM.
 //! - [`registry`] – [`HardwareRegistry`]: registers drivers and dispatches
 //!   [`HardwareIntent`][mechos_types::HardwareIntent] commands to them.
+//! - [`sim`] – [`SimRegistry`]: in-process simulation builder for CI/CD
+//!   testing without physical hardware.
 
 pub mod actuator;
 pub mod camera;
 pub mod pid;
 pub mod registry;
 pub mod relay;
+pub mod sim;
 
 pub use actuator::Actuator;
 pub use camera::{Camera, CameraFrame};
 pub use pid::PidController;
 pub use registry::HardwareRegistry;
 pub use relay::Relay;
+pub use sim::SimRegistry;

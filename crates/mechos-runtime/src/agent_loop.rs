@@ -409,7 +409,10 @@ impl AgentLoop {
         // Retrieve the most recent episodic memories as context.
         let memory_clone = Arc::clone(&self.memory);
         let memories = tokio::task::spawn_blocking(move || {
-            memory_clone.lock().unwrap().all_entries()
+            memory_clone
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .all_entries()
         })
         .await
         .unwrap_or_else(|_| Ok(vec![]))
