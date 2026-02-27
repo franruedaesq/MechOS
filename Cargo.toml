@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mechos-types",
+    "crates/mechos-middleware",
+    "crates/mechos-hal",
+    "crates/mechos-perception",
+    "crates/mechos-kernel",
+    "crates/mechos-runtime"
+]
