@@ -239,13 +239,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ingest_odom_publishes_telemetry() {
+    async fn ingest_odom_publishes_telemetry() -> Result<(), Box<dyn std::error::Error>> {
         let (bus, bridge) = make_bridge();
         let mut rx = bus.subscribe();
 
-        bridge.ingest_odom(1.0, 2.0, 0.5, 85).unwrap();
+        bridge.ingest_odom(1.0, 2.0, 0.5, 85)?;
 
-        let event = rx.recv().await.unwrap();
+        let event = rx.recv().await?;
         assert_eq!(event.source, "mechos-middleware::ros2/odom");
         assert!(matches!(event.payload, EventPayload::Telemetry(_)));
         if let EventPayload::Telemetry(t) = event.payload {
@@ -254,16 +254,17 @@ mod tests {
             assert!((t.heading_rad - 0.5).abs() < f32::EPSILON);
             assert_eq!(t.battery_percent, 85);
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn ingest_fault_publishes_hardware_fault() {
+    async fn ingest_fault_publishes_hardware_fault() -> Result<(), Box<dyn std::error::Error>> {
         let (bus, bridge) = make_bridge();
         let mut rx = bus.subscribe();
 
-        bridge.ingest_fault("motor_left", 42, "overcurrent").unwrap();
+        bridge.ingest_fault("motor_left", 42, "overcurrent")?;
 
-        let event = rx.recv().await.unwrap();
+        let event = rx.recv().await?;
         assert_eq!(event.source, "mechos-middleware::ros2/fault");
         assert!(matches!(event.payload, EventPayload::HardwareFault { .. }));
         if let EventPayload::HardwareFault { component, code, message } = event.payload {
@@ -271,69 +272,87 @@ mod tests {
             assert_eq!(code, 42);
             assert_eq!(message, "overcurrent");
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn odom_event_is_json_serialisable() {
+    async fn odom_event_is_json_serialisable() -> Result<(), Box<dyn std::error::Error>> {
         let (bus, bridge) = make_bridge();
         let mut rx = bus.subscribe();
 
-        bridge.ingest_odom(3.0, 4.0, 1.57, 60).unwrap();
+        bridge.ingest_odom(3.0, 4.0, 1.57, 60)?;
 
-        let event = rx.recv().await.unwrap();
-        let json = serde_json::to_string(&event).unwrap();
+        let event = rx.recv().await?;
+        let json = serde_json::to_string(&event)?;
         assert!(json.contains("Telemetry"));
         assert!(json.contains("ros2/odom"));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn handle_incoming_override_publishes_dashboard_override_event() {
+    async fn handle_incoming_override_publishes_dashboard_override_event() -> Result<(), Box<dyn std::error::Error>> {
         let (bus, bridge) = make_bridge();
         let mut rx = bus.subscribe();
 
         let override_msg = r#"{"op":"publish","topic":"/cmd_vel","msg":{"linear":{"x":0.5,"y":0,"z":0},"angular":{"x":0,"y":0,"z":-0.2}},"source":"dashboard_override"}"#;
         bridge.handle_incoming_ws_message(override_msg);
 
-        let event = rx.recv().await.unwrap();
+        let event = rx.recv().await?;
         assert_eq!(event.source, "mechos-middleware::dashboard_override");
         if let EventPayload::AgentThought(raw) = &event.payload {
             assert!(raw.contains("dashboard_override"));
         } else {
             panic!("expected AgentThought for override");
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn handle_incoming_human_response_publishes_human_response_event() {
+    async fn handle_incoming_human_response_publishes_human_response_event() -> Result<(), Box<dyn std::error::Error>> {
         let (bus, bridge) = make_bridge();
         let mut rx = bus.subscribe();
 
         let resp_msg = r#"{"op":"publish","topic":"/hitl/human_response","msg":{"response":"Yes, push it"}}"#;
         bridge.handle_incoming_ws_message(resp_msg);
 
-        let event = rx.recv().await.unwrap();
+        let event = rx.recv().await?;
         assert_eq!(event.source, "mechos-middleware::dashboard/human_response");
         if let EventPayload::HumanResponse(resp) = event.payload {
             assert_eq!(resp, "Yes, push it");
         } else {
             panic!("expected HumanResponse");
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn handle_incoming_unknown_message_is_ignored() {
+    async fn handle_incoming_unknown_message_is_ignored() -> Result<(), Box<dyn std::error::Error>> {
         let (bus, bridge) = make_bridge();
         let mut rx = bus.subscribe();
 
         // Publish a real event first so we have something to compare.
-        bridge.ingest_odom(0.0, 0.0, 0.0, 100).unwrap();
+        bridge.ingest_odom(0.0, 0.0, 0.0, 100)?;
         // Now try a message that matches neither override nor HITL pattern.
         bridge.handle_incoming_ws_message(r#"{"op":"subscribe","topic":"/unknown"}"#);
 
         // Only the odom event should have arrived.
-        let event = rx.recv().await.unwrap();
+        let event = rx.recv().await?;
         assert_eq!(event.source, "mechos-middleware::ros2/odom");
         // The channel should now be empty (no extra event from the unknown message).
         assert!(rx.try_recv().is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_incoming_malformed_json_returns_error() {
+        let (bus, bridge) = make_bridge();
+        let mut rx = bus.subscribe();
+
+        // Publish a malformed JSON string.
+        bridge.handle_incoming_ws_message("{ malformed_json: true");
+
+        // The bridge should not panic, and no message should be sent to the bus.
+        let result = rx.try_recv();
+        assert!(result.is_err(), "Bus should not receive any event for malformed JSON");
     }
 }
