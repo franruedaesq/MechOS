@@ -111,9 +111,18 @@ fn bytes_to_embedding(bytes: &[u8]) -> Vec<f32> {
 ///
 /// Returns a value in `[-1.0, 1.0]`, or `0.0` if either vector has zero norm.
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let (dot, norm_a_sq, norm_b_sq) = a.iter().zip(b).fold(
+        (0.0f32, 0.0f32, 0.0f32),
+        |(dot, norm_a_sq, norm_b_sq), (&x, &y)| {
+            (
+                dot + x * y,
+                norm_a_sq + x * x,
+                norm_b_sq + y * y,
+            )
+        },
+    );
+    let norm_a = norm_a_sq.sqrt();
+    let norm_b = norm_b_sq.sqrt();
     if norm_a == 0.0 || norm_b == 0.0 {
         0.0
     } else {
