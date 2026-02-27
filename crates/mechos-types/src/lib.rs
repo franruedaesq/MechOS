@@ -411,7 +411,7 @@ mod tests {
     fn lidar_scan_roundtrip() {
         let payload = EventPayload::LidarScan {
             ranges: vec![0.5, 1.0, 1.5, 2.0],
-            angle_min_rad: -1.5707963,
+            angle_min_rad: -std::f32::consts::FRAC_PI_2,
             angle_increment_rad: 0.017453293,
         };
         let json = serde_json::to_string(&payload).unwrap();
@@ -423,7 +423,7 @@ mod tests {
                 angle_increment_rad,
             } => {
                 assert_eq!(ranges.len(), 4);
-                assert!((angle_min_rad - (-1.5707963)).abs() < 1e-6);
+                assert!((angle_min_rad - (-std::f32::consts::FRAC_PI_2)).abs() < 1e-6);
                 assert!((angle_increment_rad - 0.017453293).abs() < 1e-9);
             }
             _ => panic!("expected LidarScan"),

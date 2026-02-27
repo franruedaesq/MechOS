@@ -46,6 +46,7 @@ impl Ros2Adapter {
     /// LiDAR.  `angle_min_rad` is the bearing of the first range reading
     /// (radians, in the robot frame) and `angle_increment_rad` is the angular
     /// step between consecutive readings.
+    #[allow(clippy::too_many_arguments)]
     pub fn ingest_laser_scan(
         &self,
         ranges: &[f32],

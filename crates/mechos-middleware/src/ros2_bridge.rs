@@ -209,20 +209,19 @@ impl Ros2Bridge {
         }
 
         // ── Human response to AskHuman ───────────────────────────────────────
-        if topic == "/hitl/human_response" {
-            if let Some(response) = json
+        if topic == "/hitl/human_response"
+            && let Some(response) = json
                 .get("msg")
                 .and_then(|m| m.get("response"))
                 .and_then(|r| r.as_str())
-            {
-                let event = Event {
-                    id: Uuid::new_v4(),
-                    timestamp: Utc::now(),
-                    source: "mechos-middleware::dashboard/human_response".to_string(),
-                    payload: EventPayload::HumanResponse(response.to_string()),
-                };
-                let _ = self.bus.publish(event);
-            }
+        {
+            let event = Event {
+                id: Uuid::new_v4(),
+                timestamp: Utc::now(),
+                source: "mechos-middleware::dashboard/human_response".to_string(),
+                payload: EventPayload::HumanResponse(response.to_string()),
+            };
+            let _ = self.bus.publish(event);
         }
     }
 }

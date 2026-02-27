@@ -260,7 +260,7 @@ mod tests {
         // We can't call driver.complete() without a live server, but we can verify
         // that building the augmented message vector works correctly by
         // replicating the logic inline and checking the content.
-        let messages = vec![ChatMessage {
+        let messages = [ChatMessage {
             role: Role::System,
             content: "You are a robot brain.".into(),
         }];
@@ -293,7 +293,7 @@ mod tests {
     #[test]
     fn stability_guidelines_prepended_when_no_system_message() {
         use super::STABILITY_GUIDELINES;
-        let messages = vec![ChatMessage {
+        let messages = [ChatMessage {
             role: Role::User,
             content: "What should I do?".into(),
         }];

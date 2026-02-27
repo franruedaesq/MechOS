@@ -7,17 +7,14 @@ use std::path::PathBuf;
 /// Supported AI provider choices.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum AiProvider {
+    #[default]
     Ollama,
     OpenAI,
     Anthropic,
 }
 
-impl Default for AiProvider {
-    fn default() -> Self {
-        AiProvider::Ollama
-    }
-}
 
 impl std::fmt::Display for AiProvider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -139,16 +136,14 @@ pub fn apply_env_overrides(cfg: &mut Config) {
     if let Ok(v) = std::env::var("MECHOS_MODEL") {
         cfg.active_model = v;
     }
-    if let Ok(v) = std::env::var("MECHOS_DASHBOARD_PORT") {
-        if let Ok(port) = v.parse::<u16>() {
+    if let Ok(v) = std::env::var("MECHOS_DASHBOARD_PORT")
+        && let Ok(port) = v.parse::<u16>() {
             cfg.dashboard_port = port;
         }
-    }
-    if let Ok(v) = std::env::var("MECHOS_WEBUI_PORT") {
-        if let Ok(port) = v.parse::<u16>() {
+    if let Ok(v) = std::env::var("MECHOS_WEBUI_PORT")
+        && let Ok(port) = v.parse::<u16>() {
             cfg.webui_port = port;
         }
-    }
 }
 
 /// Save the config to disk, creating `~/.mechos/` if necessary.

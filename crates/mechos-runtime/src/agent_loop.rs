@@ -49,7 +49,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
@@ -137,7 +137,7 @@ pub struct AgentLoop {
     llm: LlmDriver,
     fusion: SensorFusion,
     octree: Octree,
-    memory: EpisodicStore,
+    memory: Arc<Mutex<EpisodicStore>>,
     bus: EventBus,
     gate: KernelGate,
     loop_guard: LoopGuard,
@@ -189,13 +189,13 @@ impl AgentLoop {
 
         // In-memory episodic store or persistent file-backed store.
         let memory = match config.memory_path {
-            Some(ref path) => EpisodicStore::open(path)
-                .map_err(|e| MechError::Serialization(format!("failed to open episodic store at '{path}': {e}")))?,
-            None => EpisodicStore::open_in_memory()
-                .map_err(|e| MechError::Serialization(format!("failed to open in-memory episodic store: {e}")))?,
+            Some(ref path) => Arc::new(Mutex::new(EpisodicStore::open(path)
+                .map_err(|e| MechError::Serialization(format!("failed to open episodic store at '{path}': {e}")))?)),
+            None => Arc::new(Mutex::new(EpisodicStore::open_in_memory()
+                .map_err(|e| MechError::Serialization(format!("failed to open in-memory episodic store: {e}")))?)),
         };
 
-        let bus = config.bus.unwrap_or_else(EventBus::default);
+        let bus = config.bus.unwrap_or_default();
 
         // Subscribe to the bus for HITL responses and override events.
         let bus_rx = bus.subscribe();
@@ -359,8 +359,8 @@ impl AgentLoop {
         }
 
         // ── Manual override guard ──────────────────────────────────────────────
-        if self.override_active.load(Ordering::Acquire) {
-            if let Some(last) = self.override_last_seen {
+        if self.override_active.load(Ordering::Acquire)
+            && let Some(last) = self.override_last_seen {
                 if last.elapsed() >= self.override_suspension_duration {
                     // Configured suspension window has expired: lift the AI suspension.
                     self.override_active.store(false, Ordering::Release);
@@ -372,7 +372,6 @@ impl AgentLoop {
                     });
                 }
             }
-        }
 
         // ── HITL: waiting for human response ───────────────────────────────────
         // If the last LLM turn produced an AskHuman intent and no response has
@@ -408,11 +407,13 @@ impl AgentLoop {
 
         // ── 2. Orient ─────────────────────────────────────────────────────────
         // Retrieve the most recent episodic memories as context.
-        // TODO(perf): move SQLite I/O into `tokio::task::spawn_blocking` once
-        // EpisodicStore is refactored to be cheaply cloneable or wrapped in
-        // Arc<Mutex<>> to satisfy the `'static + Send` bound.
-        let memories = tokio::task::block_in_place(|| self.memory.all_entries())
-            .unwrap_or_default();
+        let memory_clone = Arc::clone(&self.memory);
+        let memories = tokio::task::spawn_blocking(move || {
+            memory_clone.lock().unwrap().all_entries()
+        })
+        .await
+        .unwrap_or_else(|_| Ok(vec![]))
+        .unwrap_or_default();
         let memory_entries: Vec<String> = memories
             .iter()
             .rev()
