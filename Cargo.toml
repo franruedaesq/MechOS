@@ -7,5 +7,6 @@ members = [
     "crates/mechos-perception",
     "crates/mechos-kernel",
     "crates/mechos-runtime",
-    "crates/mechos-memory"
+    "crates/mechos-memory",
+    "crates/mechos-cli"
 ]
