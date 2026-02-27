@@ -228,13 +228,10 @@ impl OctreeNode {
     fn count(&self) -> usize {
         if self.is_leaf() {
             self.points.len()
+        } else if let Some(children) = &self.children {
+            children.iter().map(|c| c.count()).sum()
         } else {
-            self.children
-                .as_ref()
-                .unwrap()
-                .iter()
-                .map(|c| c.count())
-                .sum()
+            unreachable!("non-leaf OctreeNode must have children")
         }
     }
 
@@ -249,8 +246,8 @@ impl OctreeNode {
             if self.points.len() > self.capacity && depth < max_depth {
                 self.subdivide(max_depth, depth);
             }
-        } else {
-            for child in self.children.as_mut().unwrap().iter_mut() {
+        } else if let Some(children) = self.children.as_mut() {
+            for child in children.iter_mut() {
                 if child.bounds.contains_point(point) {
                     child.insert(point, max_depth, depth + 1);
                     return;
@@ -265,12 +262,10 @@ impl OctreeNode {
         }
         if self.is_leaf() {
             self.points.contains(&p)
+        } else if let Some(children) = &self.children {
+            children.iter().any(|c| c.contains(p))
         } else {
-            self.children
-                .as_ref()
-                .unwrap()
-                .iter()
-                .any(|c| c.contains(p))
+            unreachable!("non-leaf OctreeNode must have children")
         }
     }
 
@@ -280,12 +275,10 @@ impl OctreeNode {
         }
         if self.is_leaf() {
             self.points.iter().any(|p| region.contains_point(*p))
+        } else if let Some(children) = &self.children {
+            children.iter().any(|c| c.query_aabb(region))
         } else {
-            self.children
-                .as_ref()
-                .unwrap()
-                .iter()
-                .any(|c| c.query_aabb(region))
+            unreachable!("non-leaf OctreeNode must have children")
         }
     }
 
@@ -293,8 +286,8 @@ impl OctreeNode {
     fn collect_points(&self, out: &mut Vec<Point3>) {
         if self.is_leaf() {
             out.extend_from_slice(&self.points);
-        } else {
-            for child in self.children.as_ref().unwrap().iter() {
+        } else if let Some(children) = &self.children {
+            for child in children.iter() {
                 child.collect_points(out);
             }
         }
