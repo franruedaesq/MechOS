@@ -412,6 +412,9 @@ dependencies = [
 [[package]]
 name = "mechos-kernel"
 version = "0.1.0"
+dependencies = [
+ "mechos-types",
+]
 
 [[package]]
 name = "mechos-memory"
