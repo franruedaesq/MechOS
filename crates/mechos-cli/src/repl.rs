@@ -61,7 +61,7 @@ pub fn run(shutdown: Arc<AtomicBool>) {
             "/models" => cmd_models(),
             "/connections" => cmd_connections(),
             "/start" => {
-                cmd_start();
+                cmd_start(shutdown.clone());
                 // After boot sequence completes we return to the prompt.
             }
             "/quit" | "/exit" => {
@@ -245,7 +245,7 @@ fn cmd_connections() {
     );
 }
 
-fn cmd_start() {
+fn cmd_start(shutdown: Arc<AtomicBool>) {
     let cfg = load_config_or_default();
 
     println!();
@@ -254,9 +254,29 @@ fn cmd_start() {
     println!("{}", "═══════════════════════════════════════".bold());
 
     // ── Step 1 – Memory ────────────────────────────────────────────────────
-    print!("  [1/6] {} … ", "Initializing Memory (SQLite)".bold());
+    // Resolve a persistent path: ~/.mechos/memory.db
+    let memory_path = {
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .unwrap_or_else(|_| ".".to_string());
+        let dir = std::path::PathBuf::from(home).join(".mechos");
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            println!(
+                "{}: could not create {}: {}",
+                "Warning".yellow(),
+                dir.display(),
+                e
+            );
+        }
+        dir.join("memory.db").to_string_lossy().into_owned()
+    };
+    print!(
+        "  [1/6] {} {} … ",
+        "Initializing Memory (SQLite) at".bold(),
+        memory_path.dimmed()
+    );
     io::stdout().flush().ok();
-    match mechos_memory::episodic::EpisodicStore::open_in_memory() {
+    match mechos_memory::episodic::EpisodicStore::open(&memory_path) {
         Ok(_) => println!("{}", "OK".green()),
         Err(e) => {
             println!("{}: {}", "FAILED".red(), e);
@@ -302,9 +322,11 @@ fn cmd_start() {
     let loop_config = mechos_runtime::AgentLoopConfig {
         llm_base_url: cfg.ollama_url.clone(),
         llm_model: cfg.active_model.clone(),
+        memory_path: Some(memory_path),
+        bus: Some((*bus).clone()),
         ..Default::default()
     };
-    let _agent = match mechos_runtime::AgentLoop::new(loop_config) {
+    let agent = match mechos_runtime::AgentLoop::new(loop_config) {
         Ok(agent) => agent,
         Err(e) => {
             println!("{} {}", "ERROR".red(), e);
@@ -322,6 +344,51 @@ fn cmd_start() {
     );
     println!("{}", "═══════════════════════════════════════".bold());
     println!();
+
+    // ── Spawn the continuous OODA loop in a background thread ───────────────
+    // A dedicated thread owns a single-threaded tokio runtime so that the
+    // async tick() can run without blocking the interactive REPL.
+    // OODA loop target frequency: 10 Hz (100 ms per tick).
+    const TICK_RATE_HZ: f32 = 10.0;
+    let tick_interval =
+        std::time::Duration::from_millis((1000.0 / TICK_RATE_HZ) as u64);
+    let tick_dt = 1.0 / TICK_RATE_HZ;
+
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!(
+                    "{}: failed to create async runtime for agent loop: {}\n  \
+                     Ensure your system supports async I/O (check ulimits / OS resources).",
+                    "ERROR".red(),
+                    e
+                );
+                return;
+            }
+        };
+        rt.block_on(async move {
+            let mut agent = agent;
+            loop {
+                if shutdown.load(Ordering::SeqCst) {
+                    tracing::info!("agent loop shutting down");
+                    break;
+                }
+                tokio::time::sleep(tick_interval).await;
+                match agent.tick(tick_dt).await {
+                    Ok(intent) => {
+                        tracing::info!(intent = ?intent, "agent intent dispatched");
+                    }
+                    Err(e) => {
+                        tracing::debug!(error = %e, "agent tick skipped");
+                    }
+                }
+            }
+        });
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -37,22 +37,26 @@ impl Ros2Adapter {
         Self { bus }
     }
 
-    /// Ingest a `/scan` laser-scan message and publish it as a
-    /// [`EventPayload::Telemetry`] event on the internal bus.
+    /// Ingest a `/scan` laser-scan message, publish it as a
+    /// [`EventPayload::Telemetry`] event with odometry data, and also publish
+    /// a [`EventPayload::LidarScan`] event so the [`AgentLoop`] can feed the
+    /// range data into its collision octree.
     ///
-    /// `_ranges` contains the measured distances (metres) from the physical
-    /// LiDAR.  Full range processing (3D point-cloud conversion for the Octree
-    /// collision map) is pending future integration; only the odometry fields
-    /// are used to build the telemetry snapshot.
+    /// `ranges` contains the measured distances (metres) from the physical
+    /// LiDAR.  `angle_min_rad` is the bearing of the first range reading
+    /// (radians, in the robot frame) and `angle_increment_rad` is the angular
+    /// step between consecutive readings.
     pub fn ingest_laser_scan(
         &self,
-        _ranges: &[f32],
+        ranges: &[f32],
+        angle_min_rad: f32,
+        angle_increment_rad: f32,
         position_x: f32,
         position_y: f32,
         heading_rad: f32,
         battery_percent: u8,
     ) -> Result<usize, MechError> {
-        let event = Event {
+        let telemetry_event = Event {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             source: "mechos-middleware::ros2/scan".to_string(),
@@ -63,7 +67,19 @@ impl Ros2Adapter {
                 battery_percent,
             }),
         };
-        self.bus.publish(event)
+        self.bus.publish(telemetry_event)?;
+
+        let lidar_event = Event {
+            id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            source: "mechos-middleware::ros2/scan".to_string(),
+            payload: EventPayload::LidarScan {
+                ranges: ranges.to_vec(),
+                angle_min_rad,
+                angle_increment_rad,
+            },
+        };
+        self.bus.publish(lidar_event)
     }
 
     /// Ingest a fleet broadcast message arriving on `/fleet/communications` and
@@ -301,7 +317,15 @@ mod tests {
         let mut rx = bus.subscribe();
 
         adapter
-            .ingest_laser_scan(&[1.0, 2.0, 3.0], 0.0, 0.0, 0.0, 100)
+            .ingest_laser_scan(
+                &[1.0, 2.0, 3.0],
+                -std::f32::consts::FRAC_PI_2,
+                0.1,
+                0.0,
+                0.0,
+                0.0,
+                100,
+            )
             .unwrap();
 
         let event = rx.recv().await.unwrap();
@@ -392,6 +416,44 @@ mod tests {
         if let EventPayload::AgentThought(json_str) = event.payload {
             assert!(json_str.contains("/fleet/tasks"));
             assert!(json_str.contains("Move Box 1"));
+        }
+    }
+
+    #[tokio::test]
+    async fn ingest_laser_scan_also_publishes_lidar_scan_event() {
+        let (bus, adapter) = make_adapter();
+        let mut rx = bus.subscribe();
+
+        adapter
+            .ingest_laser_scan(
+                &[1.5, 2.5],
+                -std::f32::consts::FRAC_PI_2,
+                0.1,
+                0.0,
+                0.0,
+                0.0,
+                80,
+            )
+            .unwrap();
+
+        // First event is Telemetry.
+        let first = rx.recv().await.unwrap();
+        assert!(matches!(first.payload, EventPayload::Telemetry(_)));
+
+        // Second event is LidarScan with the original ranges.
+        let second = rx.recv().await.unwrap();
+        assert_eq!(second.source, "mechos-middleware::ros2/scan");
+        if let EventPayload::LidarScan {
+            ranges,
+            angle_min_rad,
+            angle_increment_rad,
+        } = second.payload
+        {
+            assert_eq!(ranges, vec![1.5, 2.5]);
+            assert!((angle_min_rad - (-std::f32::consts::FRAC_PI_2)).abs() < 1e-5);
+            assert!((angle_increment_rad - 0.1).abs() < 1e-5);
+        } else {
+            panic!("expected LidarScan payload as second event");
         }
     }
 
