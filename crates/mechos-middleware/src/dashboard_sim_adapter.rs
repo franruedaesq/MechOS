@@ -78,6 +78,45 @@ impl DashboardSimAdapter {
         self.bus.publish(event)
     }
 
+    /// Ingest a human operator's response to an [`HardwareIntent::AskHuman`]
+    /// prompt that was previously pushed to the dashboard.
+    ///
+    /// Call this when the dashboard WebSocket sends a message on the
+    /// `/hitl/human_response` topic.  The response is published as a
+    /// [`EventPayload::HumanResponse`] event so that the [`AgentLoop`] can
+    /// inject it into the LLM context window and resume the OODA cycle.
+    ///
+    /// [`AgentLoop`]: mechos_runtime::AgentLoop
+    pub fn ingest_human_response(
+        &self,
+        response: impl Into<String>,
+    ) -> Result<usize, MechError> {
+        let event = Event {
+            id: Uuid::new_v4(),
+            timestamp: Utc::now(),
+            source: "mechos-middleware::dashboard/human_response".to_string(),
+            payload: EventPayload::HumanResponse(response.into()),
+        };
+        self.bus.publish(event)
+    }
+
+    /// Build the `rosbridge_server` JSON frame for an `AskHuman` intent.
+    ///
+    /// Returns a serialised publish command that the dashboard can display as a
+    /// UI alert.  The human operator's answer should be sent back on the
+    /// `/hitl/human_response` topic.
+    pub fn build_ask_human_frame(question: &str, context_image_id: Option<&str>) -> String {
+        json!({
+            "op": "publish",
+            "topic": "/hitl/ask_human",
+            "msg": {
+                "question": question,
+                "context_image_id": context_image_id
+            }
+        })
+        .to_string()
+    }
+
     /// Build the `rosbridge_server` JSON frame for a `Drive` intent.
     ///
     /// Returns the serialised `geometry_msgs/msg/Twist` publish command that
@@ -151,12 +190,16 @@ impl MechAdapter for DashboardSimAdapter {
                 };
                 self.bus.publish(event).map(|_| ())
             }
-            HardwareIntent::AskHuman { question, .. } => {
+            HardwareIntent::AskHuman { question, context_image_id } => {
+                let frame = Self::build_ask_human_frame(
+                    question,
+                    context_image_id.as_deref(),
+                );
                 let event = Event {
                     id: Uuid::new_v4(),
                     timestamp: Utc::now(),
                     source: "mechos-middleware::dashboard/ask_human".to_string(),
-                    payload: EventPayload::AgentThought(question.clone()),
+                    payload: EventPayload::AgentThought(frame),
                 };
                 self.bus.publish(event).map(|_| ())
             }
@@ -260,10 +303,45 @@ mod tests {
 
         let event = rx.recv().await.unwrap();
         assert_eq!(event.source, "mechos-middleware::dashboard/ask_human");
-        if let EventPayload::AgentThought(q) = event.payload {
-            assert_eq!(q, "Ready to proceed?");
+        if let EventPayload::AgentThought(json_str) = event.payload {
+            assert!(json_str.contains("/hitl/ask_human"), "must target the HITL topic");
+            assert!(json_str.contains("Ready to proceed?"));
         } else {
             panic!("expected AgentThought");
+        }
+    }
+
+    #[test]
+    fn build_ask_human_frame_contains_expected_fields() {
+        let frame = DashboardSimAdapter::build_ask_human_frame(
+            "Should I push the box?",
+            Some("frame_042"),
+        );
+        assert!(frame.contains("/hitl/ask_human"));
+        assert!(frame.contains("Should I push the box?"));
+        assert!(frame.contains("frame_042"));
+    }
+
+    #[test]
+    fn build_ask_human_frame_no_image() {
+        let frame = DashboardSimAdapter::build_ask_human_frame("Proceed?", None);
+        assert!(frame.contains("/hitl/ask_human"));
+        assert!(frame.contains("Proceed?"));
+    }
+
+    #[tokio::test]
+    async fn ingest_human_response_publishes_human_response_event() {
+        let (bus, adapter) = make_adapter();
+        let mut rx = bus.subscribe();
+
+        adapter.ingest_human_response("Yes, push it").unwrap();
+
+        let event = rx.recv().await.unwrap();
+        assert_eq!(event.source, "mechos-middleware::dashboard/human_response");
+        if let EventPayload::HumanResponse(resp) = event.payload {
+            assert_eq!(resp, "Yes, push it");
+        } else {
+            panic!("expected HumanResponse");
         }
     }
 }

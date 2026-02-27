@@ -29,6 +29,6 @@ pub mod watchdog;
 
 pub use capability_manager::CapabilityManager;
 pub use kernel_gate::KernelGate;
-pub use state_verifier::{EndEffectorWorkspaceRule, Rule, SpeedCapRule, StateVerifier};
+pub use state_verifier::{EndEffectorWorkspaceRule, ManualOverrideInterlock, Rule, SpeedCapRule, StateVerifier};
 pub use watchdog::{ComponentHealth, Watchdog};
 

@@ -15,6 +15,24 @@
 //!    invariants) via [`KernelGate`].
 //! 5. **Act** – the approved intent is published to the [`EventBus`].
 //!
+//! # Human-in-the-Loop (HITL)
+//!
+//! When the LLM outputs an [`HardwareIntent::AskHuman`] intent the loop
+//! automatically pauses.  Subsequent calls to [`AgentLoop::tick`] return
+//! [`MechError::LlmInferenceFailed`] until a human operator supplies an answer
+//! via [`AgentLoop::submit_human_response`].  The answer is then injected into
+//! the LLM context window as a [`Role::User`] message and the OODA cycle
+//! resumes normally.
+//!
+//! # Manual Override (Safety Interlock)
+//!
+//! Calling [`AgentLoop::handle_manual_override`] arms a 10-second AI
+//! suspension.  While the suspension is active [`tick`] returns early without
+//! invoking the LLM, and the [`ManualOverrideInterlock`] rule registered on the
+//! [`StateVerifier`] rejects any AI-sourced `Drive` commands that may have been
+//! in flight.  The suspension is cleared automatically once 10 seconds have
+//! elapsed since the last call to `handle_manual_override`.
+//!
 //! # Example
 //!
 //! ```rust,no_run
@@ -28,17 +46,30 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
+use std::time::{Duration, Instant};
 
-use mechos_kernel::{CapabilityManager, KernelGate, StateVerifier};
+use mechos_kernel::{CapabilityManager, KernelGate, ManualOverrideInterlock, StateVerifier};
 use mechos_memory::episodic::EpisodicStore;
 use mechos_middleware::EventBus;
 use mechos_perception::fusion::{FusedState, ImuData, OdometryData, SensorFusion};
 use mechos_perception::octree::{Aabb, Octree, Point3};
 use mechos_types::{Capability, Event, EventPayload, HardwareIntent, MechError};
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use crate::llm_driver::{ChatMessage, LlmDriver, Role};
 use crate::loop_guard::LoopGuard;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// How long the AI is suspended after the most recent manual-override command.
+const OVERRIDE_SUSPENSION_DURATION: Duration = Duration::from_secs(10);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration
@@ -88,6 +119,23 @@ pub struct AgentLoop {
     bus: EventBus,
     gate: KernelGate,
     loop_guard: LoopGuard,
+    // ── HITL state ────────────────────────────────────────────────────────────
+    /// `true` after the LLM has issued an `AskHuman` intent and before the
+    /// human operator's response has been consumed.
+    waiting_for_human: bool,
+    /// The human operator's answer, ready to be injected into the next tick.
+    pending_human_response: Option<String>,
+    // ── Manual override state ─────────────────────────────────────────────────
+    /// Shared flag that is `true` while the dashboard manual-override joystick
+    /// is held.  Also registered in the [`StateVerifier`] as a
+    /// [`ManualOverrideInterlock`] so AI `Drive` commands are automatically
+    /// rejected while the human has control.
+    override_active: Arc<AtomicBool>,
+    /// Wall-clock time of the most recent manual-override drive command.
+    override_last_seen: Option<Instant>,
+    /// Non-blocking bus subscriber used to pick up human responses and
+    /// dashboard-override events that arrive between ticks.
+    bus_rx: broadcast::Receiver<Event>,
 }
 
 impl AgentLoop {
@@ -111,12 +159,22 @@ impl AgentLoop {
 
         let bus = EventBus::default();
 
+        // Subscribe to the bus for HITL responses and override events.
+        let bus_rx = bus.subscribe();
+
+        // Shared override flag – registered in the StateVerifier so AI Drive
+        // commands are rejected whenever the human has the joystick.
+        let override_active = Arc::new(AtomicBool::new(false));
+
         // Capability manager: grant the agent identity all configured caps.
         let mut caps = CapabilityManager::new();
         for cap in config.capabilities {
             caps.grant("agent", cap);
         }
-        let verifier = StateVerifier::new();
+        let mut verifier = StateVerifier::new();
+        verifier.add_rule(Box::new(ManualOverrideInterlock::new(Arc::clone(
+            &override_active,
+        ))));
         let gate = KernelGate::new(caps, verifier);
 
         let loop_guard = LoopGuard::new(config.loop_guard_threshold);
@@ -129,6 +187,11 @@ impl AgentLoop {
             bus,
             gate,
             loop_guard,
+            waiting_for_human: false,
+            pending_human_response: None,
+            override_active,
+            override_last_seen: None,
+            bus_rx,
         }
     }
 
@@ -157,6 +220,55 @@ impl AgentLoop {
     }
 
     // -------------------------------------------------------------------------
+    // HITL API
+    // -------------------------------------------------------------------------
+
+    /// Inject a human operator's response into the OODA loop.
+    ///
+    /// Call this when the dashboard WebSocket sends a reply to an earlier
+    /// [`HardwareIntent::AskHuman`] prompt.  The response is stored and
+    /// consumed by the next [`tick`][Self::tick] call: it is prepended to the
+    /// LLM context window as a [`Role::User`] message and the OODA cycle
+    /// resumes normally.
+    pub fn submit_human_response(&mut self, response: impl Into<String>) {
+        self.pending_human_response = Some(response.into());
+        self.waiting_for_human = false;
+    }
+
+    /// `true` if the loop is currently paused waiting for a human response.
+    pub fn is_waiting_for_human(&self) -> bool {
+        self.waiting_for_human
+    }
+
+    // -------------------------------------------------------------------------
+    // Manual override API
+    // -------------------------------------------------------------------------
+
+    /// Route a dashboard manual-override drive command directly onto the bus,
+    /// bypassing the AI gate, and arm the 10-second AI suspension.
+    ///
+    /// Call this every time the dashboard sends a Twist command tagged
+    /// `source: "dashboard_override"`.  The AI suspension is lifted
+    /// automatically once [`tick`][Self::tick] runs and finds that more than
+    /// [`OVERRIDE_SUSPENSION_DURATION`] has elapsed since the last call.
+    pub fn handle_manual_override(&mut self, linear_velocity: f32, angular_velocity: f32) {
+        // Arm the interlock so AI Drive commands are rejected.
+        self.override_active.store(true, Ordering::Release);
+        self.override_last_seen = Some(Instant::now());
+
+        // Publish the override command with a distinct source tag so downstream
+        // adapters can route it directly to the HAL.
+        let event = Self::build_override_event(linear_velocity, angular_velocity);
+        // Best-effort publish – no subscribers is not an error.
+        let _ = self.bus.publish(event);
+    }
+
+    /// `true` if the AI is currently suspended due to a manual override.
+    pub fn is_override_active(&self) -> bool {
+        self.override_active.load(Ordering::Acquire)
+    }
+
+    // -------------------------------------------------------------------------
     // OODA tick
     // -------------------------------------------------------------------------
 
@@ -165,10 +277,55 @@ impl AgentLoop {
     /// # Errors
     ///
     /// Returns `Err` if:
+    /// - A manual override is active (AI suspended for up to 10 s).
+    /// - The loop is waiting for a human response to an `AskHuman` intent.
     /// - The LLM response cannot be parsed as a [`HardwareIntent`].
     /// - The [`KernelGate`] rejects the intent.
     /// - The [`LoopGuard`] detects a repetitive hallucination loop.
     pub fn tick(&mut self, dt: f32) -> Result<HardwareIntent, MechError> {
+        // ── Drain pending bus events ───────────────────────────────────────────
+        // Pick up any human responses or override notifications that arrived
+        // between ticks without blocking.
+        self.drain_bus_events();
+
+        // ── Manual override guard ──────────────────────────────────────────────
+        if self.override_active.load(Ordering::Acquire) {
+            if let Some(last) = self.override_last_seen {
+                if last.elapsed() >= OVERRIDE_SUSPENSION_DURATION {
+                    // 10-second window has expired: lift the AI suspension.
+                    self.override_active.store(false, Ordering::Release);
+                    self.override_last_seen = None;
+                } else {
+                    return Err(MechError::HardwareFault {
+                        component: "agent_loop".to_string(),
+                        details: "manual override active; AI suspended".to_string(),
+                    });
+                }
+            }
+        }
+
+        // ── HITL: waiting for human response ───────────────────────────────────
+        // If the last LLM turn produced an AskHuman intent and no response has
+        // arrived yet, pause the loop.
+        let extra_user_message: Option<ChatMessage> = if self.waiting_for_human {
+            match self.pending_human_response.take() {
+                Some(response) => {
+                    self.waiting_for_human = false;
+                    Some(ChatMessage {
+                        role: Role::User,
+                        content: response,
+                    })
+                }
+                None => {
+                    return Err(MechError::LlmInferenceFailed(
+                        "AgentLoop paused: waiting for human response via dashboard".to_string(),
+                    ));
+                }
+            }
+        } else {
+            None
+        };
+
         // ── 1. Observe ────────────────────────────────────────────────────────
         let state: FusedState = self.fusion.fused_state(dt);
 
@@ -212,7 +369,7 @@ impl AgentLoop {
             memory_context,
         );
 
-        let messages = vec![
+        let mut messages = vec![
             ChatMessage {
                 role: Role::System,
                 content: system_prompt,
@@ -222,6 +379,11 @@ impl AgentLoop {
                 content: "What is your next action? Reply with a single HardwareIntent JSON object.".to_string(),
             },
         ];
+        // If a human response was pending, inject it as the next user turn so
+        // the LLM has the operator's answer in its context window.
+        if let Some(human_msg) = extra_user_message {
+            messages.push(human_msg);
+        }
 
         // ── 3. Decide ─────────────────────────────────────────────────────────
         let raw = self.llm.complete(&messages).map_err(|e| {
@@ -259,12 +421,93 @@ impl AgentLoop {
         // Best-effort publish – no subscribers is not an error.
         let _ = self.bus.publish(event);
 
+        // ── 6. HITL bookkeeping ───────────────────────────────────────────────
+        // If the LLM asked for human guidance, park the loop until a response
+        // arrives via `submit_human_response` or a bus `HumanResponse` event.
+        if matches!(intent, HardwareIntent::AskHuman { .. }) {
+            self.waiting_for_human = true;
+        }
+
         Ok(intent)
     }
 
     // -------------------------------------------------------------------------
-    // Helpers
+    // Private helpers
     // -------------------------------------------------------------------------
+
+    /// Non-blocking drain of pending bus events.
+    ///
+    /// Processes every event that is already waiting in the broadcast buffer:
+    ///
+    /// * [`EventPayload::HumanResponse`] – stores the response so the next
+    ///   tick can inject it into the LLM context.
+    /// * `source: "mechos-middleware::dashboard_override"` – extracts the
+    ///   Twist velocities and arms the manual-override interlock.
+    fn drain_bus_events(&mut self) {
+        loop {
+            match self.bus_rx.try_recv() {
+                Ok(event) => {
+                    match &event.payload {
+                        EventPayload::HumanResponse(response) => {
+                            self.pending_human_response = Some(response.clone());
+                            self.waiting_for_human = false;
+                        }
+                        EventPayload::AgentThought(json_str)
+                            if event.source
+                                == "mechos-middleware::dashboard_override" =>
+                        {
+                            // Extract Twist velocities from the rosbridge JSON.
+                            if let Ok(json) =
+                                serde_json::from_str::<serde_json::Value>(json_str)
+                            {
+                                let linear_opt = json["msg"]["linear"]["x"].as_f64();
+                                let angular_opt = json["msg"]["angular"]["z"].as_f64();
+                                if linear_opt.is_none() || angular_opt.is_none() {
+                                    eprintln!(
+                                        "[mechos-runtime] dashboard_override: \
+                                         missing linear.x or angular.z in Twist frame"
+                                    );
+                                }
+                                let linear = linear_opt.unwrap_or(0.0) as f32;
+                                let angular = angular_opt.unwrap_or(0.0) as f32;
+                                self.override_active.store(true, Ordering::Release);
+                                self.override_last_seen = Some(Instant::now());
+                                // Re-publish the manual override command with the
+                                // kernel source tag so downstream adapters can
+                                // route it to the HAL.
+                                let fwd = Self::build_override_event(linear, angular);
+                                let _ = self.bus.publish(fwd);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Err(broadcast::error::TryRecvError::Empty) => break,
+                Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
+                Err(broadcast::error::TryRecvError::Closed) => break,
+            }
+        }
+    }
+
+    /// Build an [`Event`] that carries a manual-override Twist command with
+    /// the `"mechos-kernel::manual_override"` source tag.
+    fn build_override_event(linear_velocity: f32, angular_velocity: f32) -> Event {
+        let frame = serde_json::json!({
+            "op": "publish",
+            "topic": "/cmd_vel",
+            "msg": {
+                "linear":  { "x": linear_velocity, "y": 0.0, "z": 0.0 },
+                "angular": { "x": 0.0, "y": 0.0, "z": angular_velocity }
+            }
+        })
+        .to_string();
+        Event {
+            id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            source: "mechos-kernel::manual_override".to_string(),
+            payload: EventPayload::AgentThought(frame),
+        }
+    }
 
     fn hash_str(s: &str) -> u64 {
         let mut h = DefaultHasher::new();
@@ -334,5 +577,144 @@ mod tests {
         let mut agent = default_agent();
         let result = agent.tick(0.1);
         assert!(matches!(result, Err(MechError::LlmInferenceFailed(_))));
+    }
+
+    // ── HITL tests ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn initial_state_not_waiting_for_human() {
+        let agent = default_agent();
+        assert!(!agent.is_waiting_for_human());
+    }
+
+    #[test]
+    fn submit_human_response_clears_waiting_state() {
+        let mut agent = default_agent();
+        agent.waiting_for_human = true;
+        agent.submit_human_response("Yes, proceed");
+        assert!(!agent.is_waiting_for_human());
+        assert_eq!(agent.pending_human_response.as_deref(), Some("Yes, proceed"));
+    }
+
+    #[test]
+    fn tick_pauses_when_waiting_for_human_with_no_response() {
+        let mut agent = default_agent();
+        agent.waiting_for_human = true;
+        // No pending response – tick must pause.
+        let result = agent.tick(0.1);
+        assert!(
+            matches!(&result, Err(MechError::LlmInferenceFailed(msg)) if msg.contains("waiting for human")),
+            "expected waiting-for-human pause, got: {result:?}"
+        );
+        // Still waiting after the pause.
+        assert!(agent.is_waiting_for_human());
+    }
+
+    #[test]
+    fn tick_resumes_when_human_response_is_available() {
+        // inject a pending response; tick should proceed to LLM (which will
+        // fail because no server is running, but not with the "waiting" error).
+        let mut agent = default_agent();
+        agent.waiting_for_human = true;
+        agent.pending_human_response = Some("Yes, push it".to_string());
+        let result = agent.tick(0.1);
+        // The "waiting" state should have been cleared.
+        assert!(!agent.is_waiting_for_human());
+        // With no LLM, we expect LlmInferenceFailed (not the waiting error).
+        assert!(
+            matches!(&result, Err(MechError::LlmInferenceFailed(msg)) if !msg.contains("waiting for human")),
+            "expected LLM error after resume, got: {result:?}"
+        );
+    }
+
+    // ── Manual override tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn initial_state_override_not_active() {
+        let agent = default_agent();
+        assert!(!agent.is_override_active());
+    }
+
+    #[test]
+    fn handle_manual_override_arms_interlock() {
+        let mut agent = default_agent();
+        agent.handle_manual_override(0.5, -0.2);
+        assert!(agent.is_override_active());
+    }
+
+    #[test]
+    fn tick_returns_hardware_fault_when_override_active() {
+        let mut agent = default_agent();
+        agent.handle_manual_override(0.5, 0.0);
+        let result = agent.tick(0.1);
+        assert!(
+            matches!(
+                &result,
+                Err(MechError::HardwareFault { component, .. })
+                    if component == "agent_loop"
+            ),
+            "expected override HardwareFault, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn override_lifts_after_suspension_duration_elapses() {
+        let mut agent = default_agent();
+        agent.handle_manual_override(0.5, 0.0);
+        // Backdating the last-seen timestamp simulates the 10-s window expiring.
+        agent.override_last_seen =
+            Some(Instant::now() - OVERRIDE_SUSPENSION_DURATION - Duration::from_millis(1));
+        let result = agent.tick(0.1);
+        // Override should be cleared.
+        assert!(!agent.is_override_active());
+        // tick should proceed to the LLM (which is unavailable, so LlmInferenceFailed).
+        assert!(matches!(result, Err(MechError::LlmInferenceFailed(_))));
+    }
+
+    #[test]
+    fn handle_manual_override_publishes_kernel_event_to_bus() {
+        let mut agent = default_agent();
+        let mut rx = agent.bus().subscribe();
+        agent.handle_manual_override(1.0, -0.5);
+        let event = rx.try_recv().expect("event should be published");
+        assert_eq!(event.source, "mechos-kernel::manual_override");
+        if let EventPayload::AgentThought(json_str) = event.payload {
+            assert!(json_str.contains("/cmd_vel"));
+        } else {
+            panic!("expected AgentThought");
+        }
+    }
+
+    #[test]
+    fn drain_bus_events_picks_up_human_response() {
+        let mut agent = default_agent();
+        // Publish a HumanResponse event directly onto the agent's bus.
+        let event = Event {
+            id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            source: "mechos-middleware::dashboard/human_response".to_string(),
+            payload: EventPayload::HumanResponse("Yes, go ahead".to_string()),
+        };
+        let _ = agent.bus.publish(event);
+        agent.drain_bus_events();
+        assert_eq!(
+            agent.pending_human_response.as_deref(),
+            Some("Yes, go ahead")
+        );
+    }
+
+    #[test]
+    fn drain_bus_events_picks_up_dashboard_override() {
+        let mut agent = default_agent();
+        let override_json = r#"{"op":"publish","topic":"/cmd_vel","msg":{"linear":{"x":0.8,"y":0,"z":0},"angular":{"x":0,"y":0,"z":0.3}},"source":"dashboard_override"}"#;
+        let event = Event {
+            id: Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            source: "mechos-middleware::dashboard_override".to_string(),
+            payload: EventPayload::AgentThought(override_json.to_string()),
+        };
+        let _ = agent.bus.publish(event);
+        agent.drain_bus_events();
+        assert!(agent.is_override_active());
     }
 }

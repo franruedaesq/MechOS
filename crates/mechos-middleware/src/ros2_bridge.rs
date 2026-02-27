@@ -154,11 +154,14 @@ impl Ros2Bridge {
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
-                // Handle incoming WebSocket frames (ping/close).
+                // Handle incoming WebSocket frames.
                 msg = ws_rx.next() => {
                     match msg {
                         Some(Ok(Message::Close(_))) | None => break,
                         Some(Err(_)) => break,
+                        Some(Ok(Message::Text(text))) => {
+                            self.handle_incoming_ws_message(text.as_str());
+                        }
                         _ => {}
                     }
                 }
@@ -166,6 +169,60 @@ impl Ros2Bridge {
         }
 
         Ok(())
+    }
+
+    /// Parse an incoming WebSocket text message from the dashboard.
+    ///
+    /// Two message kinds are recognised:
+    ///
+    /// * **Manual override** – a `rosbridge_server` publish on `/cmd_vel` that
+    ///   carries the extra field `"source": "dashboard_override"`.  The Twist
+    ///   velocities are extracted and re-published on the bus with source
+    ///   `"mechos-middleware::dashboard_override"` so that the
+    ///   [`AgentLoop`] can arm its 10-second AI suspension.
+    ///
+    /// * **Human response** – a publish on `/hitl/human_response` whose `msg`
+    ///   contains a `"response"` string.  Published as
+    ///   [`EventPayload::HumanResponse`] so that the [`AgentLoop`] can inject
+    ///   it back into the LLM context window.
+    ///
+    /// Any message that does not match either pattern is silently ignored.
+    fn handle_incoming_ws_message(&self, text: &str) {
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(text) else {
+            return;
+        };
+
+        let topic = json.get("topic").and_then(|t| t.as_str()).unwrap_or("");
+        let source = json.get("source").and_then(|s| s.as_str()).unwrap_or("");
+
+        // ── Manual override ──────────────────────────────────────────────────
+        if topic == "/cmd_vel" && source == "dashboard_override" {
+            let event = Event {
+                id: Uuid::new_v4(),
+                timestamp: Utc::now(),
+                source: "mechos-middleware::dashboard_override".to_string(),
+                payload: EventPayload::AgentThought(text.to_string()),
+            };
+            let _ = self.bus.publish(event);
+            return;
+        }
+
+        // ── Human response to AskHuman ───────────────────────────────────────
+        if topic == "/hitl/human_response" {
+            if let Some(response) = json
+                .get("msg")
+                .and_then(|m| m.get("response"))
+                .and_then(|r| r.as_str())
+            {
+                let event = Event {
+                    id: Uuid::new_v4(),
+                    timestamp: Utc::now(),
+                    source: "mechos-middleware::dashboard/human_response".to_string(),
+                    payload: EventPayload::HumanResponse(response.to_string()),
+                };
+                let _ = self.bus.publish(event);
+            }
+        }
     }
 }
 
@@ -227,5 +284,56 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         assert!(json.contains("Telemetry"));
         assert!(json.contains("ros2/odom"));
+    }
+
+    #[tokio::test]
+    async fn handle_incoming_override_publishes_dashboard_override_event() {
+        let (bus, bridge) = make_bridge();
+        let mut rx = bus.subscribe();
+
+        let override_msg = r#"{"op":"publish","topic":"/cmd_vel","msg":{"linear":{"x":0.5,"y":0,"z":0},"angular":{"x":0,"y":0,"z":-0.2}},"source":"dashboard_override"}"#;
+        bridge.handle_incoming_ws_message(override_msg);
+
+        let event = rx.recv().await.unwrap();
+        assert_eq!(event.source, "mechos-middleware::dashboard_override");
+        if let EventPayload::AgentThought(raw) = &event.payload {
+            assert!(raw.contains("dashboard_override"));
+        } else {
+            panic!("expected AgentThought for override");
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_incoming_human_response_publishes_human_response_event() {
+        let (bus, bridge) = make_bridge();
+        let mut rx = bus.subscribe();
+
+        let resp_msg = r#"{"op":"publish","topic":"/hitl/human_response","msg":{"response":"Yes, push it"}}"#;
+        bridge.handle_incoming_ws_message(resp_msg);
+
+        let event = rx.recv().await.unwrap();
+        assert_eq!(event.source, "mechos-middleware::dashboard/human_response");
+        if let EventPayload::HumanResponse(resp) = event.payload {
+            assert_eq!(resp, "Yes, push it");
+        } else {
+            panic!("expected HumanResponse");
+        }
+    }
+
+    #[tokio::test]
+    async fn handle_incoming_unknown_message_is_ignored() {
+        let (bus, bridge) = make_bridge();
+        let mut rx = bus.subscribe();
+
+        // Publish a real event first so we have something to compare.
+        bridge.ingest_odom(0.0, 0.0, 0.0, 100).unwrap();
+        // Now try a message that matches neither override nor HITL pattern.
+        bridge.handle_incoming_ws_message(r#"{"op":"subscribe","topic":"/unknown"}"#);
+
+        // Only the odom event should have arrived.
+        let event = rx.recv().await.unwrap();
+        assert_eq!(event.source, "mechos-middleware::ros2/odom");
+        // The channel should now be empty (no extra event from the unknown message).
+        assert!(rx.try_recv().is_err());
     }
 }
