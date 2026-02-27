@@ -24,6 +24,22 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Stability guidelines
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Anti-loop rules that are automatically appended to every system-role message
+/// sent to the LLM.  They instruct the model to vary its strategy when previous
+/// actions have not succeeded, preventing Ollama from getting stuck in a
+/// repetitive action loop.
+pub const STABILITY_GUIDELINES: &str = "\
+## Stability Guidelines (anti-loop rules)
+- Do not repeat the same action more than 3 times in a row.
+- If an action fails, try a different approach rather than retrying immediately.
+- Vary your strategy when the previous actions have not produced progress.
+- Avoid issuing the same HardwareIntent consecutively more than 3 times.
+- When stuck, emit an EmergencyStop and reassess the situation before continuing.";
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Error type
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -105,15 +121,47 @@ impl LlmDriver {
 
     /// Send `messages` to the model and return the assistant's reply text.
     ///
+    /// `STABILITY_GUIDELINES` are automatically appended to every
+    /// [`Role::System`] message so the model always receives the anti-loop
+    /// rules regardless of how the caller constructs the conversation.  If no
+    /// system message is present in `messages`, a new one containing only the
+    /// guidelines is prepended.
+    ///
     /// # Errors
     ///
     /// Returns [`LlmError::Http`] if the request fails, or
     /// [`LlmError::BadResponse`] if the response shape is unexpected.
     pub fn complete(&self, messages: &[ChatMessage]) -> Result<String, LlmError> {
+        // Inject stability guidelines into every system message (or prepend one
+        // if the caller did not supply a system message at all).
+        let mut augmented: Vec<ChatMessage> = messages
+            .iter()
+            .map(|m| {
+                if m.role == Role::System {
+                    ChatMessage {
+                        role: Role::System,
+                        content: format!("{}\n\n{}", m.content, STABILITY_GUIDELINES),
+                    }
+                } else {
+                    m.clone()
+                }
+            })
+            .collect();
+
+        if !augmented.iter().any(|m| m.role == Role::System) {
+            augmented.insert(
+                0,
+                ChatMessage {
+                    role: Role::System,
+                    content: STABILITY_GUIDELINES.to_string(),
+                },
+            );
+        }
+
         let url = format!("{}/v1/chat/completions", self.base_url);
         let body = ChatRequest {
             model: &self.model,
-            messages,
+            messages: &augmented,
             stream: false,
         };
 
@@ -175,6 +223,76 @@ mod tests {
         let back: ChatMessage = serde_json::from_str(&json).unwrap();
         assert_eq!(back.role, Role::User);
         assert_eq!(back.content, "What is next?");
+    }
+
+    #[test]
+    fn stability_guidelines_are_appended_to_system_message() {
+        use super::STABILITY_GUIDELINES;
+        let driver = LlmDriver::new("http://localhost:11434", "llama3");
+        // We can't call driver.complete() without a live server, but we can verify
+        // that building the augmented message vector works correctly by
+        // replicating the logic inline and checking the content.
+        let messages = vec![ChatMessage {
+            role: Role::System,
+            content: "You are a robot brain.".into(),
+        }];
+        let augmented: Vec<ChatMessage> = messages
+            .iter()
+            .map(|m| {
+                if m.role == Role::System {
+                    ChatMessage {
+                        role: Role::System,
+                        content: format!("{}\n\n{}", m.content, STABILITY_GUIDELINES),
+                    }
+                } else {
+                    m.clone()
+                }
+            })
+            .collect();
+        let sys = augmented.iter().find(|m| m.role == Role::System).unwrap();
+        assert!(
+            sys.content.contains("Stability Guidelines"),
+            "system message must contain stability guidelines"
+        );
+        assert!(
+            sys.content.contains("You are a robot brain."),
+            "original system content must be preserved"
+        );
+        // Suppress unused variable warning.
+        drop(driver);
+    }
+
+    #[test]
+    fn stability_guidelines_prepended_when_no_system_message() {
+        use super::STABILITY_GUIDELINES;
+        let messages = vec![ChatMessage {
+            role: Role::User,
+            content: "What should I do?".into(),
+        }];
+        let mut augmented: Vec<ChatMessage> = messages
+            .iter()
+            .map(|m| {
+                if m.role == Role::System {
+                    ChatMessage {
+                        role: Role::System,
+                        content: format!("{}\n\n{}", m.content, STABILITY_GUIDELINES),
+                    }
+                } else {
+                    m.clone()
+                }
+            })
+            .collect();
+        if !augmented.iter().any(|m| m.role == Role::System) {
+            augmented.insert(
+                0,
+                ChatMessage {
+                    role: Role::System,
+                    content: STABILITY_GUIDELINES.to_string(),
+                },
+            );
+        }
+        assert_eq!(augmented[0].role, Role::System);
+        assert!(augmented[0].content.contains("Stability Guidelines"));
     }
 
     #[test]

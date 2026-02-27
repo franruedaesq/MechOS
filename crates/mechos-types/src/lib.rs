@@ -69,6 +69,29 @@ pub struct TelemetryData {
     pub battery_percent: u8,
 }
 
+/// Returns the full set of [`Capability`] grants that a standard MechOS agent
+/// must hold to operate all built-in hardware and sensors.
+///
+/// Use this list to bootstrap a [`mechos_kernel::CapabilityManager`] at
+/// start-up and to verify that no required permission has been omitted.
+///
+/// # Standard capabilities
+///
+/// | Capability | Covers |
+/// |---|---|
+/// | `HardwareInvoke("drive_base")` | Differential-drive commands |
+/// | `HardwareInvoke("arm_joint_1")` | Primary arm-joint actuation |
+/// | `SensorRead("lidar/scan")` | LiDAR point-cloud topic |
+/// | `SensorRead("camera/rgb")` | RGB camera image topic |
+pub fn required_capabilities() -> Vec<Capability> {
+    vec![
+        Capability::HardwareInvoke("drive_base".to_string()),
+        Capability::HardwareInvoke("arm_joint_1".to_string()),
+        Capability::SensorRead("lidar/scan".to_string()),
+        Capability::SensorRead("camera/rgb".to_string()),
+    ]
+}
+
 /// Global error type spanning hardware failures, LLM timeouts, and authorization rejections.
 #[derive(Error, Debug, Serialize, Deserialize)]
 pub enum MechError {
@@ -142,6 +165,27 @@ mod tests {
         let back: Event = serde_json::from_str(&json).unwrap();
         assert_eq!(event.id, back.id);
         assert_eq!(event.source, back.source);
+    }
+
+    #[test]
+    fn required_capabilities_contains_hardware_invoke_and_sensor_read() {
+        let caps = required_capabilities();
+        assert!(
+            caps.contains(&Capability::HardwareInvoke("drive_base".to_string())),
+            "drive_base HardwareInvoke must be present"
+        );
+        assert!(
+            caps.contains(&Capability::HardwareInvoke("arm_joint_1".to_string())),
+            "arm_joint_1 HardwareInvoke must be present"
+        );
+        assert!(
+            caps.contains(&Capability::SensorRead("lidar/scan".to_string())),
+            "lidar/scan SensorRead must be present"
+        );
+        assert!(
+            caps.contains(&Capability::SensorRead("camera/rgb".to_string())),
+            "camera/rgb SensorRead must be present"
+        );
     }
 
     #[test]

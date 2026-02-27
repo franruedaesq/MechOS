@@ -818,6 +818,8 @@ version = "0.1.0"
 name = "mechos-runtime"
 version = "0.1.0"
 dependencies = [
+ "mechos-kernel",
+ "mechos-types",
  "reqwest",
  "serde",
  "serde_json",
