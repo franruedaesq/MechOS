@@ -71,6 +71,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_capability_manager_grant() {
+        let mut mgr = CapabilityManager::new();
+        mgr.grant("test_agent", Capability::ModelInference);
+        assert!(mgr.check("test_agent", &Capability::ModelInference).is_ok());
+    }
+
+    #[test]
     fn grant_and_check_passes() {
         let mut mgr = CapabilityManager::new();
         mgr.grant("robot_agent", Capability::ModelInference);
