@@ -172,6 +172,29 @@ impl Octree {
     pub fn query_aabb(&self, region: &Aabb) -> bool {
         self.root.query_aabb(region)
     }
+
+    /// Export all points currently stored in the tree.
+    ///
+    /// This is used for Octree map sharing: a robot serialises its spatial map
+    /// as a flat list of points, broadcasts them over the fleet network, and
+    /// peer robots call [`merge`][Self::merge] to fuse the data into their own
+    /// trees.  Only the points are exported; the tree structure is not.
+    pub fn export_points(&self) -> Vec<Point3> {
+        let mut points = Vec::new();
+        self.root.collect_points(&mut points);
+        points
+    }
+
+    /// Merge a set of points (e.g. received from a peer robot's exported map)
+    /// into this tree.
+    ///
+    /// Points that fall outside the tree's root bounding box are silently
+    /// ignored, consistent with [`insert`][Self::insert].
+    pub fn merge(&mut self, points: &[Point3]) {
+        for &p in points {
+            self.insert(p);
+        }
+    }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -263,6 +286,17 @@ impl OctreeNode {
                 .unwrap()
                 .iter()
                 .any(|c| c.query_aabb(region))
+        }
+    }
+
+    /// Collect all stored points into `out` (depth-first traversal).
+    fn collect_points(&self, out: &mut Vec<Point3>) {
+        if self.is_leaf() {
+            out.extend_from_slice(&self.points);
+        } else {
+            for child in self.children.as_ref().unwrap().iter() {
+                child.collect_points(out);
+            }
         }
     }
 
@@ -477,4 +511,70 @@ mod tests {
         assert!(tree.contains(Point3::new(5.0, 5.0, 5.0)));
         assert!(tree.contains(Point3::new(45.0, 45.0, 45.0)));
     }
+
+    // ── export_points / merge ────────────────────────────────────────────────
+
+    #[test]
+    fn export_points_returns_all_inserted_points() {
+        let mut tree = unit_tree(4);
+        let pts = [
+            Point3::new(0.1, 0.1, 0.1),
+            Point3::new(0.9, 0.9, 0.9),
+            Point3::new(0.5, 0.5, 0.5),
+        ];
+        for &p in &pts {
+            tree.insert(p);
+        }
+        let exported = tree.export_points();
+        assert_eq!(exported.len(), pts.len());
+        for &p in &pts {
+            assert!(exported.contains(&p), "exported must contain {:?}", p);
+        }
+    }
+
+    #[test]
+    fn export_points_empty_tree_returns_empty_vec() {
+        let tree = unit_tree(4);
+        assert!(tree.export_points().is_empty());
+    }
+
+    #[test]
+    fn merge_fuses_peer_map_into_local_tree() {
+        // Simulate Robot A's spatial map.
+        let bounds =
+            Aabb::new(Point3::new(0.0, 0.0, 0.0), Point3::new(10.0, 10.0, 10.0));
+        let mut robot_a = Octree::new(bounds, 4);
+        robot_a.insert(Point3::new(1.0, 1.0, 1.0));
+        robot_a.insert(Point3::new(2.0, 2.0, 2.0));
+
+        // Robot B starts with its own local observation.
+        let mut robot_b = Octree::new(bounds, 4);
+        robot_b.insert(Point3::new(8.0, 8.0, 8.0));
+
+        // Robot B merges Robot A's exported map.
+        let peer_points = robot_a.export_points();
+        robot_b.merge(&peer_points);
+
+        // Robot B's tree now contains all three points.
+        assert_eq!(robot_b.len(), 3);
+        assert!(robot_b.contains(Point3::new(1.0, 1.0, 1.0)));
+        assert!(robot_b.contains(Point3::new(2.0, 2.0, 2.0)));
+        assert!(robot_b.contains(Point3::new(8.0, 8.0, 8.0)));
+    }
+
+    #[test]
+    fn merge_ignores_out_of_bounds_points() {
+        let bounds =
+            Aabb::new(Point3::new(0.0, 0.0, 0.0), Point3::new(1.0, 1.0, 1.0));
+        let mut tree = Octree::new(bounds, 4);
+        // Points from a peer with a larger world – those outside our bounds must be ignored.
+        let peer_points = vec![
+            Point3::new(0.5, 0.5, 0.5), // inside
+            Point3::new(5.0, 5.0, 5.0), // outside
+        ];
+        tree.merge(&peer_points);
+        assert_eq!(tree.len(), 1);
+        assert!(tree.contains(Point3::new(0.5, 0.5, 0.5)));
+    }
 }
+

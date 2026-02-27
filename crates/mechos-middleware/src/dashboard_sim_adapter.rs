@@ -203,6 +203,58 @@ impl MechAdapter for DashboardSimAdapter {
                 };
                 self.bus.publish(event).map(|_| ())
             }
+            HardwareIntent::MessagePeer {
+                target_robot_id,
+                message,
+            } => {
+                let msg = json!({
+                    "op": "publish",
+                    "topic": format!("/fleet/robot/{target_robot_id}/inbox"),
+                    "msg": { "data": message }
+                });
+                let event = Event {
+                    id: Uuid::new_v4(),
+                    timestamp: Utc::now(),
+                    source: format!(
+                        "mechos-middleware::dashboard/fleet/robot/{target_robot_id}/inbox"
+                    ),
+                    payload: EventPayload::AgentThought(msg.to_string()),
+                };
+                self.bus.publish(event).map(|_| ())
+            }
+            HardwareIntent::BroadcastFleet { message } => {
+                let msg = json!({
+                    "op": "publish",
+                    "topic": "/fleet/communications",
+                    "msg": { "data": message }
+                });
+                let event = Event {
+                    id: Uuid::new_v4(),
+                    timestamp: Utc::now(),
+                    source: "mechos-middleware::dashboard/fleet/communications".to_string(),
+                    payload: EventPayload::AgentThought(msg.to_string()),
+                };
+                self.bus.publish(event).map(|_| ())
+            }
+            HardwareIntent::PostTask { title, description } => {
+                let msg = json!({
+                    "op": "publish",
+                    "topic": "/fleet/tasks",
+                    "msg": {
+                        "data": serde_json::to_string(&json!({
+                            "title": title,
+                            "description": description
+                        })).unwrap_or_default()
+                    }
+                });
+                let event = Event {
+                    id: Uuid::new_v4(),
+                    timestamp: Utc::now(),
+                    source: "mechos-middleware::dashboard/fleet/tasks".to_string(),
+                    payload: EventPayload::AgentThought(msg.to_string()),
+                };
+                self.bus.publish(event).map(|_| ())
+            }
         }
     }
 
