@@ -304,7 +304,13 @@ fn cmd_start() {
         llm_model: cfg.active_model.clone(),
         ..Default::default()
     };
-    let _agent = mechos_runtime::AgentLoop::new(loop_config);
+    let _agent = match mechos_runtime::AgentLoop::new(loop_config) {
+        Ok(agent) => agent,
+        Err(e) => {
+            println!("{} {}", "ERROR".red(), e);
+            return;
+        }
+    };
     println!("{}", "OK".green());
 
     println!("{}", "═══════════════════════════════════════".bold());
