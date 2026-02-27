@@ -443,6 +443,16 @@ mod tests {
     // ── Octree – collision / AABB query ─────────────────────────────────────
 
     #[test]
+    fn query_aabb_outside_root_bounds_returns_false() {
+        let mut tree = unit_tree(4);
+        tree.insert(Point3::new(0.5, 0.5, 0.5));
+
+        // Query with an AABB entirely outside the tree's [0, 1] bounds.
+        let probe = Aabb::new(Point3::new(2.0, 2.0, 2.0), Point3::new(3.0, 3.0, 3.0));
+        assert!(!tree.query_aabb(&probe), "Query outside root bounds should return false");
+    }
+
+    #[test]
     fn query_aabb_detects_contained_point() {
         let mut tree = unit_tree(4);
         tree.insert(Point3::new(0.5, 0.5, 0.5));
