@@ -156,6 +156,15 @@ mod tests {
     }
 
     #[test]
+    fn selector_fails_then_succeeds() {
+        let tree = BehaviorNode::selector(vec![
+            BehaviorNode::leaf("fail", || NodeStatus::Failure),
+            BehaviorNode::leaf("success", || NodeStatus::Success),
+        ]);
+        assert_eq!(tree.tick(), NodeStatus::Success);
+    }
+
+    #[test]
     fn sequence_fails_on_first_failure() {
         let tree = BehaviorNode::sequence(vec![
             BehaviorNode::leaf("a", || NodeStatus::Success),
