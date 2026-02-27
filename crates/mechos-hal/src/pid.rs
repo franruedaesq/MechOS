@@ -184,6 +184,32 @@ mod tests {
     }
 
     #[test]
+    fn anti_windup_clamps_integral() {
+        let mut pid = PidController::new(1.0, 2.0, 0.0);
+        pid.set_output_limits(-10.0, 10.0);
+        pid.set_set_point(5.0);
+
+        // Step 1: Push a huge continuous error.
+        // error = 5.0, dt = 10.0 -> error * dt = 50.0.
+        // i_raw = 2.0 * 50.0 = 100.0 -> clamped to 10.0.
+        // back-calculated integral = 10.0 / 2.0 = 5.0.
+        // p = 1.0 * 5.0 = 5.0. Total = 15.0 -> clamped to 10.0.
+        let out = pid.update(0.0, 10.0);
+        assert!((out - 10.0).abs() < 1e-4);
+
+        // Step 2: Reverse the error.
+        // If windup occurred, the integral would still be massive (50.0).
+        // Since it was back-calculated to 5.0, a negative error should drop the output immediately.
+        pid.set_set_point(-5.0); // error = -5.0
+        let out2 = pid.update(0.0, 1.0);
+        // p = 1.0 * -5.0 = -5.0.
+        // new integral = 5.0 + (-5.0 * 1.0) = 0.0.
+        // i = 2.0 * 0.0 = 0.0.
+        // Total = -5.0 -> well within [-10, 10].
+        assert!((out2 - -5.0).abs() < 1e-4);
+    }
+
+    #[test]
     fn set_gains_updates_behavior() {
         let mut pid = PidController::new(1.0, 0.0, 0.0);
         pid.set_set_point(10.0);
