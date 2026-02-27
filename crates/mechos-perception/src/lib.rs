@@ -1,14 +1,20 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! `mechos-perception` – Embodied Cognition layer.
+//!
+//! Turns noisy sensor data into the mathematical representation of the
+//! physical world that an LLM needs to reason about space and motion.
+//!
+//! # Modules
+//!
+//! - [`transform`] – [`TfEngine`][transform::TfEngine]: directed graph that
+//!   computes spatial transforms (translations, rotations) between named
+//!   reference frames.
+//! - [`fusion`] – [`SensorFusion`][fusion::SensorFusion]: complementary filter
+//!   that combines heterogeneous data streams (Odometry + IMU) into a unified
+//!   [`FusedState`][fusion::FusedState].
+//! - [`octree`] – [`Octree`][octree::Octree]: uses an Octree to partition 3-D
+//!   space, providing fast collision detection so the LLM knows if a path is
+//!   clear.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod fusion;
+pub mod octree;
+pub mod transform;
