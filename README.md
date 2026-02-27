@@ -47,7 +47,14 @@ LLMs require a mathematical representation of the physical world. This crate tur
 * **Sensor Fusion Engine:** Combines heterogeneous data streams (e.g., Odometry + IMU) into a unified state estimate.
 * **Spatial Query & Collision Engine:** Uses Octrees to partition 3D space, providing fast collision detection so the LLM knows if a path is clear.
 
-### 5. `mechos-kernel` (Safety & Orchestration)
+### 5. `mechos-memory` (The Knowledge Base)
+
+Provides the robot with persistent state and recall capabilities, utilizing a local SQLite substrate.
+
+* **Episodic Memory Store:** A local vector database (`EpisodicStore`) that persists interaction summaries together with their dense embedding vectors to SQLite and supports cosine-similarity–based recall so the runtime can retrieve the memories most semantically relevant to a query.
+* **Semantic Vector State Estimator:** (`SemanticStateEstimator`) Fuses past visual embeddings with a time-decay probability model to track the semantic state of the world over time (e.g., remembering where an object was placed). Confidence rises on fresh observations and decays exponentially between ticks.
+
+### 6. `mechos-kernel` (Safety & Orchestration)
 
 The central brainstem. It does not think; it enforces rules and regulates the system.
 
@@ -55,7 +62,7 @@ The central brainstem. It does not think; it enforces rules and regulates the sy
 * **State Verifier / Safety Interlock:** A rule engine that continuously monitors physical invariants (like joint limits or speed caps) and triggers fallback behaviors if violated.
 * **Watchdog / Health Monitor:** Tracks heartbeats from all components and triggers restarts if a subsystem freezes.
 
-### 6. `mechos-runtime` (The AI Brain)
+### 7. `mechos-runtime` (The AI Brain)
 
 The execution engine where the "thinking" happens, implementing the Observe-Orient-Decide-Act (OODA) loop.
 
@@ -105,6 +112,7 @@ mechos/
     ├── mechos-middleware/      # ROS2 bridge & event bus
     ├── mechos-hal/             # Hardware abstraction layer
     ├── mechos-perception/      # Sensor fusion & spatial reasoning
+    ├── mechos-memory/          # Episodic memory store & semantic state estimator
     ├── mechos-kernel/          # Safety, permissions, watchdog
     └── mechos-runtime/         # OODA loop & LLM driver
 ```
