@@ -445,8 +445,7 @@ impl LlmDriver {
         if url.starts_with("https://") {
             return true;
         }
-        if url.starts_with("http://") {
-            let without_scheme = &url["http://".len()..];
+        if let Some(without_scheme) = url.strip_prefix("http://") {
             // Strip any path/query after the host:port segment.
             let host_port = without_scheme.split('/').next().unwrap_or("");
             // Extract the host, handling both plain `host:port` and IPv6
@@ -479,7 +478,7 @@ impl LlmDriver {
     fn estimate_tokens(text: &str) -> u64 {
         let words = text.split_whitespace().count() as u64;
         // ceil(words × 1.3) == (words * 13 + 9) / 10  (integer ceiling)
-        (words * 13 + 9) / 10
+        (words * 13).div_ceil(10)
     }
 }
 

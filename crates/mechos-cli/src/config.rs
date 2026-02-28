@@ -214,9 +214,11 @@ mod tests {
 
     #[test]
     fn config_debug_redacts_api_keys() {
-        let mut cfg = Config::default();
-        cfg.openai_api_key = "sk-super-secret".to_string();
-        cfg.anthropic_api_key = "ant-super-secret".to_string();
+        let cfg = Config {
+            openai_api_key: "sk-super-secret".to_string(),
+            anthropic_api_key: "ant-super-secret".to_string(),
+            ..Default::default()
+        };
         let debug_str = format!("{:?}", cfg);
         assert!(!debug_str.contains("sk-super-secret"), "openai key must not appear in debug output");
         assert!(!debug_str.contains("ant-super-secret"), "anthropic key must not appear in debug output");

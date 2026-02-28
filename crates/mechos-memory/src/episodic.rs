@@ -298,12 +298,11 @@ impl EpisodicStore {
             let score = cosine_similarity(&entry.embedding, query_embedding);
             if heap.len() < top_k {
                 heap.push(HeapEntry(entry, score));
-            } else if let Some(worst) = heap.peek() {
-                if score > worst.1 {
+            } else if let Some(worst) = heap.peek()
+                && score > worst.1 {
                     heap.pop();
                     heap.push(HeapEntry(entry, score));
                 }
-            }
         }
 
         // Drain heap into a vec sorted by descending similarity.

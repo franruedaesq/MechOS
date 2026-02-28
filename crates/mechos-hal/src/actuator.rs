@@ -72,7 +72,7 @@ mod tests {
         assert_eq!(act.id(), "test_joint");
         assert!((act.position() - 0.0).abs() < f32::EPSILON);
 
-        act.set_position(1.57).unwrap();
-        assert!((act.position() - 1.57).abs() < f32::EPSILON);
+        act.set_position(std::f32::consts::FRAC_PI_2).unwrap();
+        assert!((act.position() - std::f32::consts::FRAC_PI_2).abs() < f32::EPSILON);
     }
 }

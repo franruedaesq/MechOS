@@ -48,7 +48,7 @@ use crate::bus::EventBus;
 ///
 /// Frames larger than this are rejected before parsing to prevent
 /// memory-exhaustion and slow-parse denial-of-service attacks.
-pub const MAX_INCOMING_PAYLOAD_BYTES: usize = 1 * 1024 * 1024; // 1 MiB
+pub const MAX_INCOMING_PAYLOAD_BYTES: usize = 1024 * 1024; // 1 MiB
 
 /// Maximum number of incoming WebSocket messages accepted per second
 /// across a single bridge instance.  Connections that exceed this rate
@@ -404,7 +404,7 @@ mod tests {
     #[tokio::test]
     async fn payload_size_constant_is_one_mib() {
         // Verify the constant has the expected value (1 MiB).
-        assert_eq!(MAX_INCOMING_PAYLOAD_BYTES, 1 * 1024 * 1024);
+        assert_eq!(MAX_INCOMING_PAYLOAD_BYTES, 1024 * 1024);
     }
 
     #[test]
@@ -427,8 +427,8 @@ mod tests {
     #[test]
     fn max_incoming_messages_per_sec_is_reasonable() {
         // Verify the constant is a sensible non-zero value.
-        assert!(MAX_INCOMING_MESSAGES_PER_SEC > 0);
-        assert!(MAX_INCOMING_MESSAGES_PER_SEC <= 1000);
+        const { assert!(MAX_INCOMING_MESSAGES_PER_SEC > 0) };
+        const { assert!(MAX_INCOMING_MESSAGES_PER_SEC <= 1000) };
     }
 
     #[tokio::test]
