@@ -61,7 +61,7 @@ use mechos_perception::fusion::{FusedState, ImuData, OdometryData, SensorFusion}
 use mechos_perception::octree::{Aabb, Octree, Point3};
 use mechos_types::{Capability, Event, EventPayload, HardwareIntent, MechError};
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 
 use crate::llm_driver::{ChatMessage, LlmDriver, Role};
@@ -344,6 +344,7 @@ impl AgentLoop {
     /// - The LLM response cannot be parsed as a [`HardwareIntent`].
     /// - The [`KernelGate`] rejects the intent.
     /// - The [`LoopGuard`] detects a repetitive hallucination loop.
+    #[instrument(name = "agent_loop.tick", skip(self), fields(dt = dt))]
     pub async fn tick(&mut self, dt: f32) -> Result<HardwareIntent, MechError> {
         // ── Drain pending bus events ───────────────────────────────────────────
         // Pick up any human responses or override notifications that arrived
@@ -396,7 +397,10 @@ impl AgentLoop {
         };
 
         // ── 1. Observe ────────────────────────────────────────────────────────
-        let state: FusedState = self.fusion.fused_state(dt);
+        let state: FusedState = {
+            let _span = tracing::info_span!("ooda.observe").entered();
+            self.fusion.fused_state(dt)
+        };
 
         // Probe a small AABB in front of the robot for collision detection.
         let probe = Aabb::new(
@@ -407,26 +411,29 @@ impl AgentLoop {
 
         // ── 2. Orient ─────────────────────────────────────────────────────────
         // Retrieve the most recent episodic memories as context.
-        let memory_clone = Arc::clone(&self.memory);
-        let memories = tokio::task::spawn_blocking(move || {
-            memory_clone
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .all_entries()
-        })
-        .await
-        .unwrap_or_else(|_| Ok(vec![]))
-        .unwrap_or_default();
-        let memory_entries: Vec<String> = memories
-            .iter()
-            .rev()
-            .take(3)
-            .map(|e| format!("- [{}] {}", e.timestamp.format("%H:%M:%S"), e.summary))
-            .collect();
-        let memory_context = if memory_entries.is_empty() {
-            "(none)".to_string()
-        } else {
-            memory_entries.join("\n")
+        let memory_context = {
+            let _span = tracing::info_span!("ooda.orient").entered();
+            let memory_clone = Arc::clone(&self.memory);
+            let memories = tokio::task::spawn_blocking(move || {
+                memory_clone
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .all_entries()
+            })
+            .await
+            .unwrap_or_else(|_| Ok(vec![]))
+            .unwrap_or_default();
+            let memory_entries: Vec<String> = memories
+                .iter()
+                .rev()
+                .take(3)
+                .map(|e| format!("- [{}] {}", e.timestamp.format("%H:%M:%S"), e.summary))
+                .collect();
+            if memory_entries.is_empty() {
+                "(none)".to_string()
+            } else {
+                memory_entries.join("\n")
+            }
         };
 
         let system_prompt = format!(
@@ -464,9 +471,12 @@ impl AgentLoop {
         }
 
         // ── 3. Decide ─────────────────────────────────────────────────────────
-        let raw = self.llm.complete(&messages).await.map_err(|e| {
-            MechError::LlmInferenceFailed(e.to_string())
-        })?;
+        let raw = {
+            let _span = tracing::info_span!("ooda.decide").entered();
+            self.llm.complete(&messages).await.map_err(|e| {
+                MechError::LlmInferenceFailed(e.to_string())
+            })?
+        };
 
         // Hash the raw response and check for repetitive loops.
         let hash = Self::hash_str(&raw);
@@ -487,21 +497,27 @@ impl AgentLoop {
         debug!(intent = ?intent, "LLM decided intent");
 
         // ── 4. Gatekeep ───────────────────────────────────────────────────────
-        self.gate.authorize_and_verify("agent", &intent)?;
+        {
+            let _span = tracing::info_span!("ooda.gatekeep").entered();
+            self.gate.authorize_and_verify("agent", &intent)?;
+        }
 
         // ── 5. Act ────────────────────────────────────────────────────────────
         info!(intent = ?intent, "dispatching approved intent");
-        let event = Event {
-            id: Uuid::new_v4(),
-            timestamp: chrono::Utc::now(),
-            source: "mechos-runtime::agent_loop".to_string(),
-            payload: EventPayload::AgentThought(
-                serde_json::to_string(&intent)
-                    .unwrap_or_else(|_| "(serialisation error)".to_string()),
-            ),
-        };
-        // Best-effort publish – no subscribers is not an error.
-        let _ = self.bus.publish(event);
+        {
+            let _span = tracing::info_span!("ooda.act", intent = ?intent).entered();
+            let event = Event {
+                id: Uuid::new_v4(),
+                timestamp: chrono::Utc::now(),
+                source: "mechos-runtime::agent_loop".to_string(),
+                payload: EventPayload::AgentThought(
+                    serde_json::to_string(&intent)
+                        .unwrap_or_else(|_| "(serialisation error)".to_string()),
+                ),
+            };
+            // Best-effort publish – no subscribers is not an error.
+            let _ = self.bus.publish(event);
+        }
 
         // ── 6. HITL bookkeeping ───────────────────────────────────────────────
         // If the LLM asked for human guidance, park the loop until a response

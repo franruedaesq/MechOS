@@ -63,6 +63,24 @@ impl HardwareRegistry {
         self.cameras.insert(camera.id().to_string(), camera);
     }
 
+    /// Return the current position of the named actuator, or `None` if no
+    /// actuator with that identifier is registered.
+    ///
+    /// Useful in integration tests to assert that a dispatched intent
+    /// produced the expected kinematic state.
+    pub fn actuator_position(&self, id: &str) -> Option<f32> {
+        self.actuators.get(id).map(|a| a.position())
+    }
+
+    /// Return the current on/off state of the named relay, or `None` if no
+    /// relay with that identifier is registered.
+    ///
+    /// Useful in integration tests to assert that a dispatched intent
+    /// produced the expected relay state.
+    pub fn relay_state(&self, id: &str) -> Option<bool> {
+        self.relays.get(id).map(|r| r.state())
+    }
+
     /// Dispatch a [`HardwareIntent`] to the appropriate registered driver.
     ///
     /// # Errors

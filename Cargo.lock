@@ -946,6 +946,7 @@ dependencies = [
  "tokio",
  "toml",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
  "zeroize",
@@ -971,6 +972,7 @@ name = "mechos-hal"
 version = "0.1.0"
 dependencies = [
  "mechos-types",
+ "tracing",
 ]
 
 [[package]]
@@ -978,6 +980,7 @@ name = "mechos-kernel"
 version = "0.1.0"
 dependencies = [
  "mechos-types",
+ "tracing",
 ]
 
 [[package]]
@@ -990,6 +993,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+ "tracing",
  "uuid",
 ]
 
@@ -1011,6 +1015,9 @@ dependencies = [
 [[package]]
 name = "mechos-perception"
 version = "0.1.0"
+dependencies = [
+ "tracing",
+]
 
 [[package]]
 name = "mechos-runtime"
@@ -1030,6 +1037,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "tracing-opentelemetry",
  "uuid",
 ]
 
@@ -1184,6 +1192,19 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "opentelemetry"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b84bcd6ae87133e903af7ef497404dda70c60d0ea14895fc8a5e6722754fc2a0"
+dependencies = [
+ "futures-core",
+ "futures-sink",
+ "js-sys",
+ "pin-project-lite",
+ "thiserror",
 ]
 
 [[package]]
@@ -2024,6 +2045,22 @@ dependencies = [
  "log",
  "once_cell",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-opentelemetry"
+version = "0.32.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1ac28f2d093c6c477eaa76b23525478f38de514fa9aeb1285738d4b97a9552fc"
+dependencies = [
+ "js-sys",
+ "opentelemetry",
+ "smallvec",
+ "tracing",
+ "tracing-core",
+ "tracing-log",
+ "tracing-subscriber",
+ "web-time",
 ]
 
 [[package]]

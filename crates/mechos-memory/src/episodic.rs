@@ -42,6 +42,9 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+use std::cmp::Ordering as CmpOrdering;
+use std::collections::BinaryHeap;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Error type
 // ─────────────────────────────────────────────────────────────────────────────
@@ -131,8 +134,41 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// EpisodicStore
+// Min-heap entry for Top-K recall
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Wraps a `(MemoryEntry, similarity)` pair for use in a [`BinaryHeap`].
+///
+/// The heap is a *min*-heap keyed on similarity so that when the heap reaches
+/// capacity `k` we can efficiently evict the worst entry in O(log k) time,
+/// yielding an overall O(N log K) Top-K algorithm.
+struct HeapEntry(MemoryEntry, f32);
+
+impl PartialEq for HeapEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.1.total_cmp(&other.1) == CmpOrdering::Equal
+    }
+}
+
+impl Eq for HeapEntry {}
+
+// Reverse the natural float ordering so that the `BinaryHeap` (which is a
+// max-heap by default) acts as a min-heap: the entry with the *lowest*
+// similarity floats to the top and is evicted first.
+impl PartialOrd for HeapEntry {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for HeapEntry {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        // Reverse: lower similarity → greater in the heap → evicted first.
+        other.1.total_cmp(&self.1)
+    }
+}
+
+
 
 /// SQLite-backed episodic memory store.
 ///
@@ -233,6 +269,9 @@ impl EpisodicStore {
     ///
     /// Each element of the returned slice is `(MemoryEntry, similarity_score)`.
     ///
+    /// Uses a min-heap of capacity `top_k` to compute the result in
+    /// O(N log K) time and O(K) extra memory rather than sorting all N entries.
+    ///
     /// Returns [`EpisodicError::DimensionMismatch`] if `query_embedding` is
     /// empty or any stored embedding has a different dimension.
     pub fn recall_similar(
@@ -243,21 +282,35 @@ impl EpisodicStore {
         if query_embedding.is_empty() {
             return Err(EpisodicError::DimensionMismatch);
         }
+        if top_k == 0 {
+            return Ok(vec![]);
+        }
         let entries = self.all_entries()?;
-        let mut scored: Vec<(MemoryEntry, f32)> = entries
-            .into_iter()
-            .filter_map(|e| {
-                if e.embedding.len() != query_embedding.len() {
-                    None
-                } else {
-                    let score = cosine_similarity(&e.embedding, query_embedding);
-                    Some((e, score))
+
+        // Min-heap of capacity `top_k`: the entry with the lowest similarity
+        // sits at the top and is replaced when a better candidate arrives.
+        let mut heap: BinaryHeap<HeapEntry> = BinaryHeap::with_capacity(top_k + 1);
+
+        for entry in entries {
+            if entry.embedding.len() != query_embedding.len() {
+                continue;
+            }
+            let score = cosine_similarity(&entry.embedding, query_embedding);
+            if heap.len() < top_k {
+                heap.push(HeapEntry(entry, score));
+            } else if let Some(worst) = heap.peek() {
+                if score > worst.1 {
+                    heap.pop();
+                    heap.push(HeapEntry(entry, score));
                 }
-            })
-            .collect();
-        scored.sort_by(|a, b| b.1.total_cmp(&a.1));
-        scored.truncate(top_k);
-        Ok(scored)
+            }
+        }
+
+        // Drain heap into a vec sorted by descending similarity.
+        let mut result: Vec<(MemoryEntry, f32)> =
+            heap.into_iter().map(|e| (e.0, e.1)).collect();
+        result.sort_by(|a, b| b.1.total_cmp(&a.1));
+        Ok(result)
     }
 }
 
