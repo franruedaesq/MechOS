@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 
 use mechos_types::{HardwareIntent, MechError};
+use tracing::instrument;
 
 use crate::actuator::Actuator;
 use crate::camera::Camera;
@@ -87,6 +88,7 @@ impl HardwareRegistry {
     ///
     /// Returns [`MechError::HardwareFault`] when the target driver is not
     /// registered or when the underlying driver call fails.
+    #[instrument(name = "hal.dispatch", skip(self), fields(intent = ?intent))]
     pub fn dispatch(&mut self, intent: HardwareIntent) -> Result<(), MechError> {
         match intent {
             // ----------------------------------------------------------------
