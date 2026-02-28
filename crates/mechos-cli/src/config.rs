@@ -27,7 +27,7 @@ impl std::fmt::Display for AiProvider {
 }
 
 /// Persisted user configuration stored in `~/.mechos/config.toml`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Config {
     /// WebSocket port for the ROS 2 Dashboard / rosbridge adapter.
     #[serde(default = "default_dashboard_port")]
@@ -57,6 +57,26 @@ pub struct Config {
     /// Anthropic API key.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub anthropic_api_key: String,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Config")
+            .field("dashboard_port", &self.dashboard_port)
+            .field("webui_port", &self.webui_port)
+            .field("ai_provider", &self.ai_provider)
+            .field("active_model", &self.active_model)
+            .field("ollama_url", &self.ollama_url)
+            .field(
+                "openai_api_key",
+                if self.openai_api_key.is_empty() { &"<not set>" } else { &"<redacted>" },
+            )
+            .field(
+                "anthropic_api_key",
+                if self.anthropic_api_key.is_empty() { &"<not set>" } else { &"<redacted>" },
+            )
+            .finish()
+    }
 }
 
 fn default_dashboard_port() -> u16 {
@@ -156,9 +176,33 @@ pub(crate) fn save_to(cfg: &Config, path: &PathBuf) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .map_err(|e| format!("Failed to create config directory: {}", e))?;
+        // Restrict the config directory to the owner only (rwx------) on Unix.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))
+                .map_err(|e| format!("Failed to set config directory permissions: {}", e))?;
+        }
     }
     let raw = toml::to_string_pretty(cfg)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
+    // Write the file with owner-only read/write (rw-------) on Unix.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .and_then(|mut f| {
+                use std::io::Write;
+                f.write_all(raw.as_bytes())
+            })
+            .map_err(|e| format!("Failed to write config at {}: {}", path.display(), e))?;
+    }
+    #[cfg(not(unix))]
     fs::write(path, raw)
         .map_err(|e| format!("Failed to write config at {}: {}", path.display(), e))?;
     Ok(())
@@ -167,6 +211,43 @@ pub(crate) fn save_to(cfg: &Config, path: &PathBuf) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_debug_redacts_api_keys() {
+        let mut cfg = Config::default();
+        cfg.openai_api_key = "sk-super-secret".to_string();
+        cfg.anthropic_api_key = "ant-super-secret".to_string();
+        let debug_str = format!("{:?}", cfg);
+        assert!(!debug_str.contains("sk-super-secret"), "openai key must not appear in debug output");
+        assert!(!debug_str.contains("ant-super-secret"), "anthropic key must not appear in debug output");
+        assert!(debug_str.contains("<redacted>"), "debug output must show <redacted> for set keys");
+    }
+
+    #[test]
+    fn config_debug_shows_not_set_for_empty_keys() {
+        let cfg = Config::default();
+        let debug_str = format!("{:?}", cfg);
+        assert!(debug_str.contains("<not set>"), "empty API key must show <not set> in debug output");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_file_has_restrictive_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().expect("tmp dir");
+        let path = config_path_for_home(&dir.path().to_string_lossy());
+
+        let cfg = Config::default();
+        save_to(&cfg, &path).expect("save");
+
+        let file_meta = std::fs::metadata(&path).expect("file metadata");
+        let file_mode = file_meta.permissions().mode() & 0o777;
+        assert_eq!(file_mode, 0o600, "config file must have 0o600 permissions");
+
+        let dir_meta = std::fs::metadata(path.parent().unwrap()).expect("dir metadata");
+        let dir_mode = dir_meta.permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700, "config directory must have 0o700 permissions");
+    }
 
     #[test]
     fn roundtrip_default_config() {

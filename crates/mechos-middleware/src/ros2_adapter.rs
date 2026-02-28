@@ -25,6 +25,18 @@ use chrono::Utc;
 use crate::adapter::MechAdapter;
 use crate::bus::EventBus;
 
+/// Maximum number of LiDAR range readings accepted in a single scan.
+///
+/// Payloads with more entries than this are rejected to prevent memory
+/// exhaustion from malformed or malicious scan messages.
+pub const MAX_LIDAR_RANGES: usize = 4096;
+
+/// Maximum byte length of a fleet peer message.
+///
+/// Messages longer than this are rejected before they are broadcast on the
+/// internal event bus.
+pub const MAX_FLEET_MESSAGE_BYTES: usize = 64 * 1024; // 64 KiB
+
 /// Adapter that translates MechOS intents into ROS 2 messages and ingests
 /// physical sensor data from the robot.
 pub struct Ros2Adapter {
@@ -57,6 +69,14 @@ impl Ros2Adapter {
         heading_rad: f32,
         battery_percent: u8,
     ) -> Result<usize, MechError> {
+        // ── Input validation ───────────────────────────────────────────────
+        if ranges.len() > MAX_LIDAR_RANGES {
+            return Err(MechError::Parsing(format!(
+                "laser scan has {} range readings, exceeding the limit of {}",
+                ranges.len(),
+                MAX_LIDAR_RANGES,
+            )));
+        }
         let telemetry_event = Event {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
@@ -93,6 +113,15 @@ impl Ros2Adapter {
         from_robot_id: &str,
         message: &str,
     ) -> Result<usize, MechError> {
+        // ── Input validation ───────────────────────────────────────────────
+        if message.len() > MAX_FLEET_MESSAGE_BYTES {
+            return Err(MechError::Parsing(format!(
+                "fleet message from '{}' is {} bytes, exceeding the limit of {}",
+                from_robot_id,
+                message.len(),
+                MAX_FLEET_MESSAGE_BYTES,
+            )));
+        }
         let event = Event {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
@@ -267,6 +296,36 @@ mod tests {
         let bus = Arc::new(EventBus::default());
         let adapter = Ros2Adapter::new(Arc::clone(&bus));
         (bus, adapter)
+    }
+
+    #[tokio::test]
+    async fn ingest_laser_scan_rejects_oversized_ranges() {
+        let (_, adapter) = make_adapter();
+        let oversized_ranges: Vec<f32> = vec![1.0; MAX_LIDAR_RANGES + 1];
+        let result = adapter.ingest_laser_scan(
+            &oversized_ranges,
+            0.0,
+            0.1,
+            0.0,
+            0.0,
+            0.0,
+            100,
+        );
+        assert!(
+            matches!(result, Err(MechError::Parsing(_))),
+            "expected Parsing error for oversized LiDAR scan, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_fleet_message_rejects_oversized_message() {
+        let (_, adapter) = make_adapter();
+        let oversized_msg = "x".repeat(MAX_FLEET_MESSAGE_BYTES + 1);
+        let result = adapter.ingest_fleet_message("robot_alpha", &oversized_msg);
+        assert!(
+            matches!(result, Err(MechError::Parsing(_))),
+            "expected Parsing error for oversized fleet message, got: {result:?}"
+        );
     }
 
     #[tokio::test]

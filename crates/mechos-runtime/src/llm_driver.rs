@@ -98,6 +98,10 @@ pub enum LlmError {
         /// Configured token budget.
         budget: u64,
     },
+    /// The configured endpoint uses an insecure `http://` scheme for a
+    /// non-localhost host.  External model endpoints must use `https://`.
+    #[error("Insecure endpoint: '{0}' uses http:// for a non-localhost host; use https://")]
+    InsecureEndpoint(String),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -301,6 +305,12 @@ impl LlmDriver {
         )
     )]
     pub async fn complete(&self, messages: &[ChatMessage]) -> Result<String, LlmError> {
+        // ── TLS enforcement ────────────────────────────────────────────────
+        // Reject plaintext HTTP connections to non-localhost hosts.
+        if !Self::is_secure_url(&self.base_url) {
+            return Err(LlmError::InsecureEndpoint(self.base_url.clone()));
+        }
+
         // ── Budget circuit breaker ─────────────────────────────────────────
         let used = self.total_tokens.load(Ordering::Relaxed);
         if used >= self.token_budget {
@@ -418,6 +428,44 @@ impl LlmDriver {
         }
 
         Ok(reply)
+    }
+
+    /// Return `true` when `url` is safe to connect to without further TLS
+    /// enforcement.
+    ///
+    /// A URL is considered safe when it:
+    /// * uses the `https://` scheme, **or**
+    /// * uses `http://` but targets only a loopback address (`localhost`,
+    ///   `127.0.0.1`, or `::1`), where TLS is unnecessary.
+    ///
+    /// All other `http://` URLs – i.e. connections to remote hosts in
+    /// plaintext – are rejected to ensure external model endpoints always
+    /// use TLS.
+    pub(crate) fn is_secure_url(url: &str) -> bool {
+        if url.starts_with("https://") {
+            return true;
+        }
+        if url.starts_with("http://") {
+            let without_scheme = &url["http://".len()..];
+            // Strip any path/query after the host:port segment.
+            let host_port = without_scheme.split('/').next().unwrap_or("");
+            // Extract the host, handling both plain `host:port` and IPv6
+            // `[addr]:port` forms.
+            let host = if host_port.starts_with('[') {
+                // IPv6 bracketed address: find the closing ']'.
+                match host_port.find(']') {
+                    Some(close) => &host_port[1..close],
+                    // Malformed IPv6 literal – not safe to treat as localhost.
+                    None => return false,
+                }
+            } else if let Some(idx) = host_port.rfind(':') {
+                &host_port[..idx]
+            } else {
+                host_port
+            };
+            return matches!(host, "localhost" | "127.0.0.1" | "::1");
+        }
+        false
     }
 
     /// Estimate the number of tokens in `text` using a word-count heuristic.
@@ -640,6 +688,47 @@ mod tests {
     fn estimate_tokens_ten_words() {
         // 10 words × 1.3 = 13.0, ceil = 13
         assert_eq!(LlmDriver::estimate_tokens("one two three four five six seven eight nine ten"), 13);
+    }
+
+    #[test]
+    fn is_secure_url_accepts_https() {
+        assert!(LlmDriver::is_secure_url("https://api.openai.com"));
+        assert!(LlmDriver::is_secure_url("https://api.anthropic.com/v1"));
+    }
+
+    #[test]
+    fn is_secure_url_accepts_localhost_http() {
+        assert!(LlmDriver::is_secure_url("http://localhost:11434"));
+        assert!(LlmDriver::is_secure_url("http://127.0.0.1:11434"));
+        assert!(LlmDriver::is_secure_url("http://localhost:11434/v1/chat"));
+        assert!(LlmDriver::is_secure_url("http://[::1]:11434"));
+    }
+
+    #[test]
+    fn is_secure_url_rejects_external_http() {
+        assert!(!LlmDriver::is_secure_url("http://api.openai.com"));
+        assert!(!LlmDriver::is_secure_url("http://my-robot-server:8080"));
+        assert!(!LlmDriver::is_secure_url("http://192.168.1.1:11434"));
+    }
+
+    #[test]
+    fn is_secure_url_rejects_malformed_ipv6() {
+        // Missing closing bracket – must not be treated as localhost.
+        assert!(!LlmDriver::is_secure_url("http://[::1:11434"));
+    }
+
+    #[tokio::test]
+    async fn complete_returns_insecure_endpoint_for_external_http() {
+        let driver = LlmDriver::new("http://external-server:11434", "llama3");
+        let messages = [ChatMessage {
+            role: Role::User,
+            content: "Hello".into(),
+        }];
+        let result = driver.complete(&messages).await;
+        assert!(
+            matches!(result, Err(LlmError::InsecureEndpoint(_))),
+            "expected InsecureEndpoint, got: {result:?}"
+        );
     }
 
     #[test]
