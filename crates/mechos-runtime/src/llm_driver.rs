@@ -4,6 +4,24 @@
 //! OpenAI-compatible `/v1/chat/completions` endpoint, such as
 //! [Ollama](https://ollama.com) (`http://localhost:11434`).
 //!
+//! # Cost control
+//!
+//! [`LlmDriver`] includes built-in safeguards against runaway API spend:
+//!
+//! * **Token counter** – every call to [`LlmDriver::complete`] estimates the
+//!   tokens consumed (prompt + reply) via a simple word-count heuristic and
+//!   accumulates the total.  The running total is exposed via
+//!   [`LlmDriver::total_tokens`].
+//! * **Rate limiter** – a [`governor`]-backed token-bucket rate limiter
+//!   enforces at most [`LlmDriver::DEFAULT_RPM`] requests per minute.  When
+//!   the bucket is empty, [`LlmDriver::complete`] returns
+//!   [`LlmError::RateLimitExceeded`] immediately rather than blocking.
+//! * **Budget circuit breaker** – once the cumulative token count exceeds
+//!   [`LlmDriver::DEFAULT_TOKEN_BUDGET`] (or the custom value supplied to
+//!   [`LlmDriver::with_budget`]) the driver trips and every subsequent call
+//!   returns [`LlmError::BudgetExceeded`] until the owner resets the counter
+//!   with [`LlmDriver::reset_token_counter`].
+//!
 //! # Example
 //!
 //! ```rust,no_run
@@ -20,6 +38,14 @@
 //! // let reply = driver.complete(&messages).unwrap();
 //! ```
 
+use std::num::NonZeroU32;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+use governor::clock::DefaultClock;
+use governor::middleware::NoOpMiddleware;
+use governor::state::{InMemoryState, NotKeyed};
+use governor::{Quota, RateLimiter};
 use mechos_types::HardwareIntent;
 use schemars::schema_for;
 use serde::{Deserialize, Serialize};
@@ -54,6 +80,22 @@ pub enum LlmError {
     /// The response from the model server could not be parsed.
     #[error("Unexpected response format: {0}")]
     BadResponse(String),
+    /// The per-minute request rate limit has been reached.
+    ///
+    /// The caller should back off and retry after a short delay.
+    #[error("LLM rate limit exceeded: too many requests per minute")]
+    RateLimitExceeded,
+    /// The cumulative token budget has been exhausted.
+    ///
+    /// Call [`LlmDriver::reset_token_counter`] or increase the budget via
+    /// [`LlmDriver::with_budget`] before issuing further requests.
+    #[error("LLM token budget exceeded: {used} tokens used, budget is {budget}")]
+    BudgetExceeded {
+        /// Tokens consumed so far in this session.
+        used: u64,
+        /// Configured token budget.
+        budget: u64,
+    },
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -107,6 +149,12 @@ struct Choice {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Rate-limiter type alias
+// ─────────────────────────────────────────────────────────────────────────────
+
+type DirectRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock, NoOpMiddleware>;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // LlmDriver
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -114,29 +162,113 @@ struct Choice {
 ///
 /// Construct once and reuse across OODA loop iterations.
 ///
-/// # Known limitations
+/// # Cost control
 ///
-/// - TODO(cost-control): Add token counting, cost estimation, and per-minute
-///   rate limiting to prevent runaway API spend when using cloud providers
-///   such as OpenAI.  Track in issue #<rate-limiting>.
-/// - TODO(observability): Attach OpenTelemetry span attributes (model name,
-///   prompt token count, latency) so LLM calls are traceable end-to-end from
-///   intent to hardware action.
+/// See the [module-level documentation](self) for details on the built-in
+/// token counter, rate limiter, and budget circuit breaker.
 pub struct LlmDriver {
     base_url: String,
     model: String,
     client: reqwest::Client,
+    /// Cumulative token counter (prompt + completion tokens, estimated).
+    total_tokens: Arc<AtomicU64>,
+    /// Maximum tokens allowed before the circuit breaker trips.
+    token_budget: u64,
+    /// Token-bucket rate limiter (requests per minute).
+    rate_limiter: Arc<DirectRateLimiter>,
 }
 
 impl LlmDriver {
+    /// Default maximum requests per minute.
+    pub const DEFAULT_RPM: u32 = 20;
+
+    /// Default token budget before the circuit breaker trips (≈ 100 k tokens).
+    pub const DEFAULT_TOKEN_BUDGET: u64 = 100_000;
+
     /// Create a new driver pointing at `base_url` (e.g. `"http://localhost:11434"`)
     /// and using `model` (e.g. `"llama3"`).
+    ///
+    /// The driver is initialised with [`DEFAULT_RPM`][Self::DEFAULT_RPM] and
+    /// [`DEFAULT_TOKEN_BUDGET`][Self::DEFAULT_TOKEN_BUDGET].  Use
+    /// [`with_budget`][Self::with_budget] or
+    /// [`with_rpm`][Self::with_rpm] to customise the limits.
     pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
+        Self::with_limits(
+            base_url,
+            model,
+            Self::DEFAULT_RPM,
+            Self::DEFAULT_TOKEN_BUDGET,
+        )
+    }
+
+    /// Create a driver with a custom token budget (all other defaults apply).
+    pub fn with_budget(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        token_budget: u64,
+    ) -> Self {
+        Self::with_limits(base_url, model, Self::DEFAULT_RPM, token_budget)
+    }
+
+    /// Create a driver with a custom requests-per-minute rate limit (all other
+    /// defaults apply).
+    pub fn with_rpm(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        rpm: u32,
+    ) -> Self {
+        Self::with_limits(base_url, model, rpm, Self::DEFAULT_TOKEN_BUDGET)
+    }
+
+    /// Create a driver with fully custom rate limits.
+    ///
+    /// # Arguments
+    ///
+    /// * `rpm` – maximum requests per minute.  A value of `0` is silently
+    ///   clamped to `1` because the underlying [`governor`] rate limiter
+    ///   requires a non-zero quota.
+    /// * `token_budget` – maximum cumulative tokens before the circuit breaker
+    ///   trips.
+    pub fn with_limits(
+        base_url: impl Into<String>,
+        model: impl Into<String>,
+        rpm: u32,
+        token_budget: u64,
+    ) -> Self {
+        // Guard: governor panics on quota of zero – clamp to at least 1 RPM.
+        let rpm = rpm.max(1);
+        let quota = Quota::per_minute(
+            NonZeroU32::new(rpm).expect("rpm is >= 1 after max(1) clamp above"),
+        );
+        let rate_limiter = Arc::new(RateLimiter::direct(quota));
         Self {
             base_url: base_url.into(),
             model: model.into(),
             client: reqwest::Client::new(),
+            total_tokens: Arc::new(AtomicU64::new(0)),
+            token_budget,
+            rate_limiter,
         }
+    }
+
+    /// Return the cumulative number of tokens consumed since construction (or
+    /// the last call to [`reset_token_counter`][Self::reset_token_counter]).
+    ///
+    /// The count is an estimate based on a simple word-count heuristic
+    /// (tokens ≈ words × 1.3).
+    pub fn total_tokens(&self) -> u64 {
+        self.total_tokens.load(Ordering::Relaxed)
+    }
+
+    /// Reset the cumulative token counter and un-trip the budget circuit
+    /// breaker, allowing further requests.
+    pub fn reset_token_counter(&self) {
+        self.total_tokens.store(0, Ordering::Relaxed);
+    }
+
+    /// Return the configured token budget.
+    pub fn token_budget(&self) -> u64 {
+        self.token_budget
     }
 
     /// Send `messages` to the model and return the assistant's reply text.
@@ -149,9 +281,26 @@ impl LlmDriver {
     ///
     /// # Errors
     ///
-    /// Returns [`LlmError::Http`] if the request fails, or
-    /// [`LlmError::BadResponse`] if the response shape is unexpected.
+    /// Returns [`LlmError::RateLimitExceeded`] when the per-minute request
+    /// quota is exhausted, [`LlmError::BudgetExceeded`] when the cumulative
+    /// token budget has been exhausted, [`LlmError::Http`] if the request
+    /// fails, or [`LlmError::BadResponse`] if the response shape is
+    /// unexpected.
     pub async fn complete(&self, messages: &[ChatMessage]) -> Result<String, LlmError> {
+        // ── Budget circuit breaker ─────────────────────────────────────────
+        let used = self.total_tokens.load(Ordering::Relaxed);
+        if used >= self.token_budget {
+            return Err(LlmError::BudgetExceeded {
+                used,
+                budget: self.token_budget,
+            });
+        }
+
+        // ── Rate limiter ───────────────────────────────────────────────────
+        if self.rate_limiter.check().is_err() {
+            return Err(LlmError::RateLimitExceeded);
+        }
+
         // Inject stability guidelines into every system message (or prepend one
         // if the caller did not supply a system message at all).
         let mut augmented: Vec<ChatMessage> = messages
@@ -201,12 +350,41 @@ impl LlmDriver {
             .json()
             .await?;
 
-        response
+        let reply = response
             .choices
             .into_iter()
             .next()
             .map(|c| c.message.content)
-            .ok_or_else(|| LlmError::BadResponse("empty choices array".into()))
+            .ok_or_else(|| LlmError::BadResponse("empty choices array".into()))?;
+
+        // ── Token accounting ───────────────────────────────────────────────
+        // Estimate tokens for both the prompt and the completion reply.
+        // The heuristic (words × 1.3) approximates the BPE token count well
+        // enough for budget enforcement without adding a heavy tokeniser
+        // dependency.
+        let prompt_tokens: u64 = augmented
+            .iter()
+            .map(|m| Self::estimate_tokens(&m.content))
+            .sum();
+        let reply_tokens = Self::estimate_tokens(&reply);
+        self.total_tokens
+            .fetch_add(prompt_tokens + reply_tokens, Ordering::Relaxed);
+
+        Ok(reply)
+    }
+
+    /// Estimate the number of tokens in `text` using a word-count heuristic.
+    ///
+    /// The formula `ceil(words × 1.3)` approximates BPE tokenisation for
+    /// English text.  It is intentionally conservative (over-counts) so the
+    /// budget circuit breaker errs on the side of caution.
+    ///
+    /// Implemented with integer arithmetic as `(words * 13 + 9) / 10` to
+    /// avoid floating-point conversion.
+    fn estimate_tokens(text: &str) -> u64 {
+        let words = text.split_whitespace().count() as u64;
+        // ceil(words × 1.3) == (words * 13 + 9) / 10  (integer ceiling)
+        (words * 13 + 9) / 10
     }
 }
 
@@ -338,5 +516,90 @@ mod tests {
         assert!(schema_str.contains("AskHuman"));
         assert!(schema_str.contains("Drive"));
         assert!(schema_str.contains("TriggerRelay"));
+    }
+
+    // ── Cost-control tests ────────────────────────────────────────────────────
+
+    #[test]
+    fn default_token_counter_starts_at_zero() {
+        let driver = LlmDriver::new("http://localhost:11434", "llama3");
+        assert_eq!(driver.total_tokens(), 0);
+    }
+
+    #[test]
+    fn reset_token_counter_clears_accumulated_tokens() {
+        let driver = LlmDriver::new("http://localhost:11434", "llama3");
+        driver.total_tokens.store(9_999, Ordering::Relaxed);
+        driver.reset_token_counter();
+        assert_eq!(driver.total_tokens(), 0);
+    }
+
+    #[test]
+    fn token_budget_accessor_returns_configured_value() {
+        let driver = LlmDriver::with_budget("http://localhost:11434", "llama3", 50_000);
+        assert_eq!(driver.token_budget(), 50_000);
+    }
+
+    #[tokio::test]
+    async fn budget_circuit_breaker_trips_when_budget_exhausted() {
+        // Set a tiny budget of 1 token so it's already exhausted.
+        let driver = LlmDriver::with_budget("http://localhost:11434", "llama3", 1);
+        // Simulate that 1 token has already been consumed.
+        driver.total_tokens.store(1, Ordering::Relaxed);
+
+        let messages = [ChatMessage {
+            role: Role::User,
+            content: "What next?".into(),
+        }];
+        let result = driver.complete(&messages).await;
+        assert!(
+            matches!(result, Err(LlmError::BudgetExceeded { .. })),
+            "expected BudgetExceeded, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn rate_limiter_trips_when_quota_exhausted() {
+        // Create a driver with a tiny RPM so the single permitted token is
+        // consumed before we call complete().
+        let driver = LlmDriver::with_rpm("http://localhost:11434", "llama3", 1);
+        // Exhaust the rate-limiter bucket by calling check() once.
+        // (1 RPM = 1 token per 60 s; the bucket starts full with 1 token.)
+        let _ = driver.rate_limiter.check();
+
+        let messages = [ChatMessage {
+            role: Role::User,
+            content: "What next?".into(),
+        }];
+        let result = driver.complete(&messages).await;
+        assert!(
+            matches!(result, Err(LlmError::RateLimitExceeded)),
+            "expected RateLimitExceeded, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn estimate_tokens_empty_string_returns_zero() {
+        assert_eq!(LlmDriver::estimate_tokens(""), 0);
+    }
+
+    #[test]
+    fn estimate_tokens_single_word() {
+        // 1 word × 1.3 = 1.3, ceil = 2
+        assert_eq!(LlmDriver::estimate_tokens("hello"), 2);
+    }
+
+    #[test]
+    fn estimate_tokens_ten_words() {
+        // 10 words × 1.3 = 13.0, ceil = 13
+        assert_eq!(LlmDriver::estimate_tokens("one two three four five six seven eight nine ten"), 13);
+    }
+
+    #[test]
+    fn with_limits_clamps_zero_rpm_to_one() {
+        // Should not panic (governor would panic on zero quota).
+        let driver = LlmDriver::with_limits("http://localhost:11434", "llama3", 0, 100_000);
+        // The bucket should have capacity for exactly 1 request per minute.
+        assert!(driver.rate_limiter.check().is_ok());
     }
 }
