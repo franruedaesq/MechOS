@@ -11,3 +11,7 @@ members = [
     "crates/mechos-cli",
     "crates/mechos-cockpit"
 ]
+
+[workspace.dependencies]
+tracing = "0.1"
+tracing-opentelemetry = "0.32"
