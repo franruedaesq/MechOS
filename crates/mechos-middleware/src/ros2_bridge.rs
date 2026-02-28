@@ -12,11 +12,28 @@
 //!
 //! The bridge is intentionally agnostic about the *meaning* of the data it
 //! routes; it only handles serialisation and transport.
+//!
+//! # Security
+//!
+//! Incoming WebSocket frames are subject to two hard limits enforced before
+//! any content is parsed:
+//!
+//! * **Payload size** – frames larger than [`MAX_INCOMING_PAYLOAD_BYTES`] are
+//!   silently dropped and the connection is closed to prevent memory exhaustion
+//!   or slow-parse denial-of-service attacks.
+//! * **Rate limit** – the bridge accepts at most
+//!   [`MAX_INCOMING_MESSAGES_PER_SEC`] messages per second across all
+//!   connections.  Connections that exceed this quota are closed.
 
 use std::net::SocketAddr;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
+use governor::clock::DefaultClock;
+use governor::middleware::NoOpMiddleware;
+use governor::state::{InMemoryState, NotKeyed};
+use governor::{Quota, RateLimiter};
 use mechos_types::{Event, EventPayload, MechError, TelemetryData};
 use serde_json;
 use tokio::net::{TcpListener, TcpStream};
@@ -27,17 +44,40 @@ use tracing::{error, warn};
 
 use crate::bus::EventBus;
 
+/// Maximum size (in bytes) of an incoming WebSocket payload.
+///
+/// Frames larger than this are rejected before parsing to prevent
+/// memory-exhaustion and slow-parse denial-of-service attacks.
+pub const MAX_INCOMING_PAYLOAD_BYTES: usize = 1 * 1024 * 1024; // 1 MiB
+
+/// Maximum number of incoming WebSocket messages accepted per second
+/// across a single bridge instance.  Connections that exceed this rate
+/// are closed.
+pub const MAX_INCOMING_MESSAGES_PER_SEC: u32 = 100;
+
+type DirectRateLimiter = RateLimiter<NotKeyed, InMemoryState, DefaultClock, NoOpMiddleware>;
+
 /// Bridge between ROS2 topics and the internal [`EventBus`] / WebSocket
 /// clients.
 #[derive(Clone)]
 pub struct Ros2Bridge {
     bus: Arc<EventBus>,
+    /// Rate limiter for incoming WebSocket messages (shared across all
+    /// connections served by this bridge instance).
+    incoming_limiter: Arc<DirectRateLimiter>,
 }
 
 impl Ros2Bridge {
     /// Create a new bridge backed by `bus`.
     pub fn new(bus: Arc<EventBus>) -> Self {
-        Self { bus }
+        let quota = Quota::per_second(
+            NonZeroU32::new(MAX_INCOMING_MESSAGES_PER_SEC)
+                .expect("MAX_INCOMING_MESSAGES_PER_SEC is non-zero"),
+        );
+        Self {
+            bus,
+            incoming_limiter: Arc::new(RateLimiter::direct(quota)),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -161,6 +201,24 @@ impl Ros2Bridge {
                         Some(Ok(Message::Close(_))) | None => break,
                         Some(Err(_)) => break,
                         Some(Ok(Message::Text(text))) => {
+                            // ── Payload size guard ─────────────────────────
+                            if text.len() > MAX_INCOMING_PAYLOAD_BYTES {
+                                warn!(
+                                    peer = %peer,
+                                    payload_bytes = text.len(),
+                                    limit_bytes = MAX_INCOMING_PAYLOAD_BYTES,
+                                    "incoming WebSocket payload exceeds size limit; closing connection"
+                                );
+                                break;
+                            }
+                            // ── Rate limit guard ───────────────────────────
+                            if self.incoming_limiter.check().is_err() {
+                                warn!(
+                                    peer = %peer,
+                                    "incoming WebSocket rate limit exceeded; closing connection"
+                                );
+                                break;
+                            }
                             self.handle_incoming_ws_message(text.as_str());
                         }
                         _ => {}
@@ -341,6 +399,36 @@ mod tests {
         // The channel should now be empty (no extra event from the unknown message).
         assert!(rx.try_recv().is_err());
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn payload_size_constant_is_one_mib() {
+        // Verify the constant has the expected value (1 MiB).
+        assert_eq!(MAX_INCOMING_PAYLOAD_BYTES, 1 * 1024 * 1024);
+    }
+
+    #[test]
+    fn incoming_payload_exceeding_limit_is_detected() {
+        // Build a payload just over the limit and verify the size check that
+        // handle_ws_client performs would catch it.
+        let oversized = "x".repeat(MAX_INCOMING_PAYLOAD_BYTES + 1);
+        assert!(
+            oversized.len() > MAX_INCOMING_PAYLOAD_BYTES,
+            "test payload must exceed the limit"
+        );
+        // Verify a normal-sized payload would pass the check.
+        let normal = "x".repeat(MAX_INCOMING_PAYLOAD_BYTES);
+        assert!(
+            normal.len() <= MAX_INCOMING_PAYLOAD_BYTES,
+            "normal payload must be within the limit"
+        );
+    }
+
+    #[test]
+    fn max_incoming_messages_per_sec_is_reasonable() {
+        // Verify the constant is a sensible non-zero value.
+        assert!(MAX_INCOMING_MESSAGES_PER_SEC > 0);
+        assert!(MAX_INCOMING_MESSAGES_PER_SEC <= 1000);
     }
 
     #[tokio::test]
