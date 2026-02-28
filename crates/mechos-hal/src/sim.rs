@@ -314,4 +314,98 @@ mod tests {
             })
             .expect("ask_human must succeed");
     }
+
+    // ── Intent-to-execution flow assertions ───────────────────────────────────
+    // These tests verify that dispatching a HardwareIntent produces the correct
+    // kinematic state in the simulated drivers, enabling CI to assert on
+    // intent-to-execution flows without actuating real motors.
+
+    #[test]
+    fn drive_intent_produces_correct_wheel_targets() {
+        // linear=1.0, angular=0.0 → left = 1.0 - 0*0.5 = 1.0, right = 1.0
+        let mut registry = SimRegistry::new().with_drive_base().build();
+        registry
+            .dispatch(HardwareIntent::Drive {
+                linear_velocity: 1.0,
+                angular_velocity: 0.0,
+            })
+            .unwrap();
+        let left = registry.actuator_position("left_wheel").expect("left_wheel registered");
+        let right = registry.actuator_position("right_wheel").expect("right_wheel registered");
+        assert!((left - 1.0).abs() < f32::EPSILON, "left_wheel={left}");
+        assert!((right - 1.0).abs() < f32::EPSILON, "right_wheel={right}");
+    }
+
+    #[test]
+    fn turn_in_place_produces_opposite_wheel_targets() {
+        // linear=0.0, angular=1.0 → left = -0.5, right = 0.5
+        let mut registry = SimRegistry::new().with_drive_base().build();
+        registry
+            .dispatch(HardwareIntent::Drive {
+                linear_velocity: 0.0,
+                angular_velocity: 1.0,
+            })
+            .unwrap();
+        let left = registry.actuator_position("left_wheel").unwrap();
+        let right = registry.actuator_position("right_wheel").unwrap();
+        assert!((left - (-0.5)).abs() < f32::EPSILON, "left_wheel={left}");
+        assert!((right - 0.5).abs() < f32::EPSILON, "right_wheel={right}");
+    }
+
+    #[test]
+    fn end_effector_intent_records_x_position() {
+        let mut registry = SimRegistry::new().with_end_effector().build();
+        registry
+            .dispatch(HardwareIntent::MoveEndEffector {
+                x: 0.42,
+                y: 0.0,
+                z: 0.0,
+            })
+            .unwrap();
+        let pos = registry.actuator_position("end_effector").unwrap();
+        assert!((pos - 0.42).abs() < f32::EPSILON, "end_effector={pos}");
+    }
+
+    #[test]
+    fn relay_intent_records_on_state() {
+        let mut registry = SimRegistry::new().with_relay("vacuum").build();
+        registry
+            .dispatch(HardwareIntent::TriggerRelay {
+                relay_id: "vacuum".to_string(),
+                state: true,
+            })
+            .unwrap();
+        assert_eq!(registry.relay_state("vacuum"), Some(true));
+    }
+
+    #[test]
+    fn relay_intent_records_off_state() {
+        let mut registry = SimRegistry::new().with_relay("vacuum").build();
+        // Turn on then off.
+        registry
+            .dispatch(HardwareIntent::TriggerRelay {
+                relay_id: "vacuum".to_string(),
+                state: true,
+            })
+            .unwrap();
+        registry
+            .dispatch(HardwareIntent::TriggerRelay {
+                relay_id: "vacuum".to_string(),
+                state: false,
+            })
+            .unwrap();
+        assert_eq!(registry.relay_state("vacuum"), Some(false));
+    }
+
+    #[test]
+    fn actuator_position_returns_none_for_unknown_id() {
+        let registry = SimRegistry::new().with_drive_base().build();
+        assert!(registry.actuator_position("nonexistent").is_none());
+    }
+
+    #[test]
+    fn relay_state_returns_none_for_unknown_id() {
+        let registry = SimRegistry::new().with_relay("gripper").build();
+        assert!(registry.relay_state("nonexistent").is_none());
+    }
 }

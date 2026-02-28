@@ -41,6 +41,7 @@
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use governor::clock::DefaultClock;
 use governor::middleware::NoOpMiddleware;
@@ -50,6 +51,7 @@ use mechos_types::HardwareIntent;
 use schemars::schema_for;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tracing::{debug, instrument, warn};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Stability guidelines
@@ -286,6 +288,18 @@ impl LlmDriver {
     /// token budget has been exhausted, [`LlmError::Http`] if the request
     /// fails, or [`LlmError::BadResponse`] if the response shape is
     /// unexpected.
+    #[instrument(
+        name = "llm_driver.complete",
+        skip(self, messages),
+        fields(
+            model = %self.model,
+            tokens_used_before = %self.total_tokens.load(Ordering::Relaxed),
+            prompt_tokens = tracing::field::Empty,
+            reply_tokens = tracing::field::Empty,
+            tokens_used_after = tracing::field::Empty,
+            inference_latency_ms = tracing::field::Empty,
+        )
+    )]
     pub async fn complete(&self, messages: &[ChatMessage]) -> Result<String, LlmError> {
         // ── Budget circuit breaker ─────────────────────────────────────────
         let used = self.total_tokens.load(Ordering::Relaxed);
@@ -340,6 +354,7 @@ impl LlmDriver {
             },
         };
 
+        let inference_start = Instant::now();
         let response: ChatResponse = self
             .client
             .post(&url)
@@ -349,6 +364,7 @@ impl LlmDriver {
             .error_for_status()?
             .json()
             .await?;
+        let inference_latency_ms = inference_start.elapsed().as_millis() as u64;
 
         let reply = response
             .choices
@@ -367,8 +383,39 @@ impl LlmDriver {
             .map(|m| Self::estimate_tokens(&m.content))
             .sum();
         let reply_tokens = Self::estimate_tokens(&reply);
-        self.total_tokens
-            .fetch_add(prompt_tokens + reply_tokens, Ordering::Relaxed);
+        let new_total = self
+            .total_tokens
+            .fetch_add(prompt_tokens + reply_tokens, Ordering::Relaxed)
+            + prompt_tokens
+            + reply_tokens;
+
+        // ── Record span attributes ─────────────────────────────────────────
+        let span = tracing::Span::current();
+        span.record("prompt_tokens", prompt_tokens);
+        span.record("reply_tokens", reply_tokens);
+        span.record("tokens_used_after", new_total);
+        span.record("inference_latency_ms", inference_latency_ms);
+        debug!(
+            model = %self.model,
+            prompt_tokens,
+            reply_tokens,
+            tokens_used_after = new_total,
+            inference_latency_ms,
+            "LLM inference complete"
+        );
+        if new_total > self.token_budget {
+            warn!(
+                tokens_used = new_total,
+                budget = self.token_budget,
+                "token budget exceeded; further requests will be rejected"
+            );
+        } else if new_total == self.token_budget {
+            warn!(
+                tokens_used = new_total,
+                budget = self.token_budget,
+                "token budget reached; next request will be rejected"
+            );
+        }
 
         Ok(reply)
     }
