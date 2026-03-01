@@ -25,6 +25,10 @@
 //! - [`loop_guard`] – [`LoopGuard`][loop_guard::LoopGuard]:
 //!   a safety mechanism that detects when the LLM is stuck requesting the same
 //!   failing action repeatedly and signals that an intervention is required.
+//! - [`telemetry`] – [`init_tracing`][telemetry::init_tracing]:
+//!   initialises the global `tracing` subscriber with an optional OTLP span
+//!   exporter.  Set `OTEL_EXPORTER_OTLP_ENDPOINT` to enable live trace export
+//!   to Jaeger, Grafana Tempo, or any OTLP-compatible collector.
 //!
 //! # Kernel gating
 //!
@@ -38,11 +42,13 @@ pub mod agent_loop;
 pub mod behavior_tree;
 pub mod llm_driver;
 pub mod loop_guard;
+pub mod telemetry;
 
 pub use agent_loop::{AgentLoop, AgentLoopConfig};
 pub use behavior_tree::{BehaviorNode, NodeStatus};
 pub use llm_driver::{ChatMessage, LlmDriver, LlmError, Role, STABILITY_GUIDELINES};
 pub use loop_guard::LoopGuard;
+pub use telemetry::{init_tracing, TracerProviderGuard};
 
 // Re-export the kernel gate so the runtime can use it as its hardware dispatch
 // interception point without callers needing a direct dependency on
