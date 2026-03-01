@@ -175,7 +175,8 @@ impl AgentLoop {
     /// Returns [`MechError::Serialization`] if the in-memory episodic store
     /// cannot be initialised (e.g. SQLite is unavailable).
     pub fn new(config: AgentLoopConfig) -> Result<Self, MechError> {
-        let llm = LlmDriver::new(&config.llm_base_url, &config.llm_model);
+        let llm = LlmDriver::new(&config.llm_base_url, &config.llm_model)
+            .map_err(|e| MechError::Serialization(format!("failed to create LLM driver: {e}")))?;
 
         // Sensor fusion with a strong IMU weight.
         let fusion = SensorFusion::new(0.98);

@@ -27,7 +27,8 @@
 //! ```rust,no_run
 //! use mechos_runtime::llm_driver::{LlmDriver, ChatMessage, Role};
 //!
-//! let driver = LlmDriver::new("http://localhost:11434", "llama3");
+//! let driver = LlmDriver::new("http://localhost:11434", "llama3")
+//!     .expect("failed to build LLM driver");
 //!
 //! let messages = vec![
 //!     ChatMessage { role: Role::System, content: "You are a robot brain.".into() },
@@ -102,6 +103,10 @@ pub enum LlmError {
     /// non-localhost host.  External model endpoints must use `https://`.
     #[error("Insecure endpoint: '{0}' uses http:// for a non-localhost host; use https://")]
     InsecureEndpoint(String),
+    /// The HTTP client could not be configured (e.g. TLS initialisation
+    /// failed on the target platform).
+    #[error("Driver configuration error: {0}")]
+    Configuration(String),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -198,7 +203,12 @@ impl LlmDriver {
     /// [`DEFAULT_TOKEN_BUDGET`][Self::DEFAULT_TOKEN_BUDGET].  Use
     /// [`with_budget`][Self::with_budget] or
     /// [`with_rpm`][Self::with_rpm] to customise the limits.
-    pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LlmError::Configuration`] if the HTTP client cannot be
+    /// initialised (e.g. TLS is unavailable on the target platform).
+    pub fn new(base_url: impl Into<String>, model: impl Into<String>) -> Result<Self, LlmError> {
         Self::with_limits(
             base_url,
             model,
@@ -208,21 +218,31 @@ impl LlmDriver {
     }
 
     /// Create a driver with a custom token budget (all other defaults apply).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LlmError::Configuration`] if the HTTP client cannot be
+    /// initialised.
     pub fn with_budget(
         base_url: impl Into<String>,
         model: impl Into<String>,
         token_budget: u64,
-    ) -> Self {
+    ) -> Result<Self, LlmError> {
         Self::with_limits(base_url, model, Self::DEFAULT_RPM, token_budget)
     }
 
     /// Create a driver with a custom requests-per-minute rate limit (all other
     /// defaults apply).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LlmError::Configuration`] if the HTTP client cannot be
+    /// initialised.
     pub fn with_rpm(
         base_url: impl Into<String>,
         model: impl Into<String>,
         rpm: u32,
-    ) -> Self {
+    ) -> Result<Self, LlmError> {
         Self::with_limits(base_url, model, rpm, Self::DEFAULT_TOKEN_BUDGET)
     }
 
@@ -235,17 +255,23 @@ impl LlmDriver {
     ///   requires a non-zero quota.
     /// * `token_budget` – maximum cumulative tokens before the circuit breaker
     ///   trips.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LlmError::Configuration`] if the HTTP client cannot be
+    /// initialised (e.g. TLS is unavailable on the target platform).
     pub fn with_limits(
         base_url: impl Into<String>,
         model: impl Into<String>,
         rpm: u32,
         token_budget: u64,
-    ) -> Self {
-        // Guard: governor panics on quota of zero – clamp to at least 1 RPM.
-        let rpm = rpm.max(1);
-        let quota = Quota::per_minute(
-            NonZeroU32::new(rpm).expect("rpm is >= 1 after max(1) clamp above"),
-        );
+    ) -> Result<Self, LlmError> {
+        // Guard: governor requires a non-zero quota – clamp to at least 1 RPM.
+        // `rpm.max(1)` guarantees the value is >= 1 so `NonZeroU32::new` will
+        // always return `Some`; `unwrap_or(MIN)` is a defensive fallback that
+        // avoids any possibility of a panic without relying on that invariant.
+        let rpm = NonZeroU32::new(rpm.max(1)).unwrap_or(NonZeroU32::MIN);
+        let quota = Quota::per_minute(rpm);
         let rate_limiter = Arc::new(RateLimiter::direct(quota));
         // Enforce a TLS 1.2 minimum for all HTTPS connections made by this
         // driver.  The application-level `is_secure_url` guard already rejects
@@ -254,15 +280,15 @@ impl LlmDriver {
         let client = reqwest::ClientBuilder::new()
             .min_tls_version(reqwest::tls::Version::TLS_1_2)
             .build()
-            .expect("failed to build reqwest client with TLS 1.2 minimum");
-        Self {
+            .map_err(|e| LlmError::Configuration(e.to_string()))?;
+        Ok(Self {
             base_url: base_url.into(),
             model: model.into(),
             client,
             total_tokens: Arc::new(AtomicU64::new(0)),
             token_budget,
             rate_limiter,
-        }
+        })
     }
 
     /// Return the cumulative number of tokens consumed since construction (or
@@ -536,7 +562,7 @@ mod tests {
     #[test]
     fn stability_guidelines_are_appended_to_system_message() {
         use super::STABILITY_GUIDELINES;
-        let driver = LlmDriver::new("http://localhost:11434", "llama3");
+        let driver = LlmDriver::new("http://localhost:11434", "llama3").unwrap();
         // We can't call driver.complete() without a live server, but we can verify
         // that building the augmented message vector works correctly by
         // replicating the logic inline and checking the content.
@@ -605,7 +631,7 @@ mod tests {
 
     #[test]
     fn llm_driver_constructed_without_panic() {
-        let _driver = LlmDriver::new("http://localhost:11434", "llama3");
+        let _driver = LlmDriver::new("http://localhost:11434", "llama3").unwrap();
     }
 
     #[test]
@@ -624,13 +650,13 @@ mod tests {
 
     #[test]
     fn default_token_counter_starts_at_zero() {
-        let driver = LlmDriver::new("http://localhost:11434", "llama3");
+        let driver = LlmDriver::new("http://localhost:11434", "llama3").unwrap();
         assert_eq!(driver.total_tokens(), 0);
     }
 
     #[test]
     fn reset_token_counter_clears_accumulated_tokens() {
-        let driver = LlmDriver::new("http://localhost:11434", "llama3");
+        let driver = LlmDriver::new("http://localhost:11434", "llama3").unwrap();
         driver.total_tokens.store(9_999, Ordering::Relaxed);
         driver.reset_token_counter();
         assert_eq!(driver.total_tokens(), 0);
@@ -638,14 +664,14 @@ mod tests {
 
     #[test]
     fn token_budget_accessor_returns_configured_value() {
-        let driver = LlmDriver::with_budget("http://localhost:11434", "llama3", 50_000);
+        let driver = LlmDriver::with_budget("http://localhost:11434", "llama3", 50_000).unwrap();
         assert_eq!(driver.token_budget(), 50_000);
     }
 
     #[tokio::test]
     async fn budget_circuit_breaker_trips_when_budget_exhausted() {
         // Set a tiny budget of 1 token so it's already exhausted.
-        let driver = LlmDriver::with_budget("http://localhost:11434", "llama3", 1);
+        let driver = LlmDriver::with_budget("http://localhost:11434", "llama3", 1).unwrap();
         // Simulate that 1 token has already been consumed.
         driver.total_tokens.store(1, Ordering::Relaxed);
 
@@ -664,7 +690,7 @@ mod tests {
     async fn rate_limiter_trips_when_quota_exhausted() {
         // Create a driver with a tiny RPM so the single permitted token is
         // consumed before we call complete().
-        let driver = LlmDriver::with_rpm("http://localhost:11434", "llama3", 1);
+        let driver = LlmDriver::with_rpm("http://localhost:11434", "llama3", 1).unwrap();
         // Exhaust the rate-limiter bucket by calling check() once.
         // (1 RPM = 1 token per 60 s; the bucket starts full with 1 token.)
         let _ = driver.rate_limiter.check();
@@ -726,7 +752,7 @@ mod tests {
 
     #[tokio::test]
     async fn complete_returns_insecure_endpoint_for_external_http() {
-        let driver = LlmDriver::new("http://external-server:11434", "llama3");
+        let driver = LlmDriver::new("http://external-server:11434", "llama3").unwrap();
         let messages = [ChatMessage {
             role: Role::User,
             content: "Hello".into(),
@@ -741,7 +767,8 @@ mod tests {
     #[test]
     fn with_limits_clamps_zero_rpm_to_one() {
         // Should not panic (governor would panic on zero quota).
-        let driver = LlmDriver::with_limits("http://localhost:11434", "llama3", 0, 100_000);
+        let driver = LlmDriver::with_limits("http://localhost:11434", "llama3", 0, 100_000)
+            .unwrap();
         // The bucket should have capacity for exactly 1 request per minute.
         assert!(driver.rate_limiter.check().is_ok());
     }
@@ -750,8 +777,16 @@ mod tests {
     fn llm_driver_client_is_built_with_tls_minimum_without_panic() {
         // Constructing a driver should succeed: the ClientBuilder with
         // min_tls_version(TLS_1_2) must not panic or return an error.
-        let driver = LlmDriver::new("http://localhost:11434", "llama3");
+        let driver = LlmDriver::new("http://localhost:11434", "llama3").unwrap();
         // A non-zero model name confirms the struct was fully initialised.
         assert!(!driver.model.is_empty());
+    }
+
+    #[test]
+    fn new_constructor_returns_ok_on_supported_platform() {
+        // Verify that LlmDriver::new returns Ok (not a Configuration error)
+        // on a platform with working TLS support.
+        let result = LlmDriver::new("http://localhost:11434", "llama3");
+        assert!(result.is_ok(), "expected Ok from LlmDriver::new on this platform");
     }
 }
