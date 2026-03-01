@@ -149,6 +149,12 @@ pub(crate) fn load_from(path: &PathBuf) -> Result<Option<Config>, String> {
 /// | `MECHOS_MODEL` | `active_model` |
 /// | `MECHOS_DASHBOARD_PORT` | `dashboard_port` |
 /// | `MECHOS_WEBUI_PORT` | `webui_port` |
+/// | `MECHOS_OPENAI_API_KEY` | `openai_api_key` |
+/// | `MECHOS_ANTHROPIC_API_KEY` | `anthropic_api_key` |
+///
+/// Using environment variables for API keys is the recommended approach for
+/// production deployments – it avoids storing secrets in the config file on
+/// disk entirely.
 pub fn apply_env_overrides(cfg: &mut Config) {
     if let Ok(v) = std::env::var("MECHOS_OLLAMA_URL") {
         cfg.ollama_url = v;
@@ -164,6 +170,12 @@ pub fn apply_env_overrides(cfg: &mut Config) {
         && let Ok(port) = v.parse::<u16>() {
             cfg.webui_port = port;
         }
+    if let Ok(v) = std::env::var("MECHOS_OPENAI_API_KEY") {
+        cfg.openai_api_key = v;
+    }
+    if let Ok(v) = std::env::var("MECHOS_ANTHROPIC_API_KEY") {
+        cfg.anthropic_api_key = v;
+    }
 }
 
 /// Save the config to disk, creating `~/.mechos/` if necessary.
@@ -330,5 +342,25 @@ mod tests {
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.webui_port, 8181);
         unsafe { std::env::remove_var("MECHOS_WEBUI_PORT") };
+    }
+
+    #[test]
+    fn apply_env_overrides_changes_openai_api_key() {
+        // SAFETY: single-threaded test; no data races on env vars.
+        unsafe { std::env::set_var("MECHOS_OPENAI_API_KEY", "sk-test-key") };
+        let mut cfg = Config::default();
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.openai_api_key, "sk-test-key");
+        unsafe { std::env::remove_var("MECHOS_OPENAI_API_KEY") };
+    }
+
+    #[test]
+    fn apply_env_overrides_changes_anthropic_api_key() {
+        // SAFETY: single-threaded test; no data races on env vars.
+        unsafe { std::env::set_var("MECHOS_ANTHROPIC_API_KEY", "ant-test-key") };
+        let mut cfg = Config::default();
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.anthropic_api_key, "ant-test-key");
+        unsafe { std::env::remove_var("MECHOS_ANTHROPIC_API_KEY") };
     }
 }
