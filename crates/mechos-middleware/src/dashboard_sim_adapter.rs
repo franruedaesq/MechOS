@@ -78,6 +78,7 @@ impl DashboardSimAdapter {
                 heading_rad,
                 battery_percent,
             }),
+            trace_id: None,
         };
         let n = self.bus.publish(event)?;
 
@@ -97,6 +98,7 @@ impl DashboardSimAdapter {
                     angle_min_rad: -std::f32::consts::FRAC_PI_2,
                     angle_increment_rad,
                 },
+                trace_id: None,
             };
             let _ = self.bus.publish(scan_event);
         }
@@ -122,6 +124,7 @@ impl DashboardSimAdapter {
             timestamp: Utc::now(),
             source: "mechos-middleware::dashboard/human_response".to_string(),
             payload: EventPayload::HumanResponse(response.into()),
+            trace_id: None,
         };
         self.bus.publish(event)
     }
@@ -185,6 +188,7 @@ impl MechAdapter for DashboardSimAdapter {
                     timestamp: Utc::now(),
                     source: "mechos-middleware::dashboard/cmd_vel".to_string(),
                     payload: EventPayload::AgentThought(frame),
+                    trace_id: None,
                 };
                 self.bus.publish(event).map(|_| ())
             }
@@ -199,6 +203,7 @@ impl MechAdapter for DashboardSimAdapter {
                     timestamp: Utc::now(),
                     source: "mechos-middleware::dashboard/end_effector".to_string(),
                     payload: EventPayload::AgentThought(msg.to_string()),
+                    trace_id: None,
                 };
                 self.bus.publish(event).map(|_| ())
             }
@@ -213,6 +218,7 @@ impl MechAdapter for DashboardSimAdapter {
                     timestamp: Utc::now(),
                     source: format!("mechos-middleware::dashboard/relay/{relay_id}"),
                     payload: EventPayload::AgentThought(msg.to_string()),
+                    trace_id: None,
                 };
                 self.bus.publish(event).map(|_| ())
             }
@@ -226,6 +232,7 @@ impl MechAdapter for DashboardSimAdapter {
                     timestamp: Utc::now(),
                     source: "mechos-middleware::dashboard/ask_human".to_string(),
                     payload: EventPayload::AgentThought(frame),
+                    trace_id: None,
                 };
                 self.bus.publish(event).map(|_| ())
             }
@@ -245,6 +252,7 @@ impl MechAdapter for DashboardSimAdapter {
                         "mechos-middleware::dashboard/fleet/robot/{target_robot_id}/inbox"
                     ),
                     payload: EventPayload::AgentThought(msg.to_string()),
+                    trace_id: None,
                 };
                 self.bus.publish(event).map(|_| ())
             }
@@ -259,6 +267,7 @@ impl MechAdapter for DashboardSimAdapter {
                     timestamp: Utc::now(),
                     source: "mechos-middleware::dashboard/fleet/communications".to_string(),
                     payload: EventPayload::AgentThought(msg.to_string()),
+                    trace_id: None,
                 };
                 self.bus.publish(event).map(|_| ())
             }
@@ -278,6 +287,7 @@ impl MechAdapter for DashboardSimAdapter {
                     timestamp: Utc::now(),
                     source: "mechos-middleware::dashboard/fleet/tasks".to_string(),
                     payload: EventPayload::AgentThought(msg.to_string()),
+                    trace_id: None,
                 };
                 self.bus.publish(event).map(|_| ())
             }

@@ -1006,10 +1006,12 @@ dependencies = [
  "futures-util",
  "governor",
  "mechos-types",
+ "opentelemetry",
  "serde_json",
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "tracing-opentelemetry",
  "uuid",
 ]
 
@@ -1206,6 +1208,7 @@ dependencies = [
  "js-sys",
  "pin-project-lite",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

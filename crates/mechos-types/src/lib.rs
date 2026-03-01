@@ -57,6 +57,17 @@ pub struct Event {
     /// e.g., "mechos-middleware::ros2"
     pub source: String,
     pub payload: EventPayload,
+    /// W3C-compatible trace identifier propagated from the originating span.
+    ///
+    /// When an event is published through [`EventBus`] this field is
+    /// automatically populated with the current OpenTelemetry trace ID (hex
+    /// string) or, when no OTel provider is active, with the tracing span ID
+    /// (`"tracing:<id>"`).  Consumers can use this value to correlate bus
+    /// events with distributed traces.
+    ///
+    /// Set to `None` when no span is active at publish time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace_id: Option<String>,
 }
 
 /// Variants of data that can be routed over the internal event bus.
@@ -268,6 +279,7 @@ mod tests {
                 heading_rad: 0.5,
                 battery_percent: 80,
             }),
+            trace_id: None,
         };
         let json = serde_json::to_string(&event).unwrap();
         let back: Event = serde_json::from_str(&json).unwrap();

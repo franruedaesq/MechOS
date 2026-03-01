@@ -267,6 +267,7 @@ pub(crate) fn handle_upstream_message(text: &str, bus: &Arc<EventBus>) {
             timestamp: Utc::now(),
             source: "mechos-middleware::dashboard_override".to_string(),
             payload: EventPayload::AgentThought(text.to_string()),
+            trace_id: None,
         };
         let _ = bus.publish(event);
         return;
@@ -284,6 +285,7 @@ pub(crate) fn handle_upstream_message(text: &str, bus: &Arc<EventBus>) {
                 timestamp: Utc::now(),
                 source: "mechos-middleware::dashboard/human_response".to_string(),
                 payload: EventPayload::HumanResponse(response.to_string()),
+                trace_id: None,
             };
             let _ = bus.publish(event);
         }
@@ -302,6 +304,7 @@ pub(crate) fn handle_upstream_message(text: &str, bus: &Arc<EventBus>) {
             timestamp: Utc::now(),
             source: "mechos-cockpit::server".to_string(),
             payload: EventPayload::AgentModeToggle { paused },
+            trace_id: None,
         };
         let _ = bus.publish(event);
     }
@@ -411,6 +414,7 @@ mod tests {
             timestamp: Utc::now(),
             source: "test".to_string(),
             payload: EventPayload::AgentThought("sentinel".to_string()),
+            trace_id: None,
         };
         let _ = bus.publish(known_event);
 
@@ -438,6 +442,7 @@ mod tests {
             timestamp: Utc::now(),
             source: "test".to_string(),
             payload: EventPayload::AgentThought("sentinel".to_string()),
+            trace_id: None,
         };
         let _ = bus.publish(known_event);
 

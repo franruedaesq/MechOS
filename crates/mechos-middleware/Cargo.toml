@@ -13,4 +13,6 @@ uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
 async-trait = "0.1"
 tracing = "0.1"
+tracing-opentelemetry = { workspace = true }
+opentelemetry = "0.31"
 governor = "0.10.4"

@@ -72,6 +72,7 @@ fn main() {
                 code: 911,
                 message: "EMERGENCY_STOP: operator Ctrl-C".to_string(),
             },
+            trace_id: None,
         };
         let _ = bus_ctrlc_ref.publish_to(Topic::SystemAlerts, stop_event);
 

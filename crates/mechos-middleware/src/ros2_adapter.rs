@@ -87,6 +87,7 @@ impl Ros2Adapter {
                 heading_rad,
                 battery_percent,
             }),
+            trace_id: None,
         };
         self.bus.publish(telemetry_event)?;
 
@@ -99,6 +100,7 @@ impl Ros2Adapter {
                 angle_min_rad,
                 angle_increment_rad,
             },
+            trace_id: None,
         };
         self.bus.publish(lidar_event)
     }
@@ -130,6 +132,7 @@ impl Ros2Adapter {
                 from_robot_id: from_robot_id.to_string(),
                 message: message.to_string(),
             },
+            trace_id: None,
         };
         self.bus.publish(event)
     }
@@ -169,6 +172,7 @@ impl MechAdapter for Ros2Adapter {
                     timestamp: Utc::now(),
                     source: "mechos-middleware::ros2/joint_states".to_string(),
                     payload: EventPayload::AgentThought(moveit_goal.to_string()),
+                    trace_id: None,
                 };
                 self.bus.publish(event).map(|_| ())
             }
@@ -189,6 +193,7 @@ impl MechAdapter for Ros2Adapter {
                     timestamp: Utc::now(),
                     source: "mechos-middleware::ros2/cmd_vel".to_string(),
                     payload: EventPayload::AgentThought(twist.to_string()),
+                    trace_id: None,
                 };
                 self.bus.publish(event).map(|_| ())
             }
@@ -203,6 +208,7 @@ impl MechAdapter for Ros2Adapter {
                     timestamp: Utc::now(),
                     source: format!("mechos-middleware::ros2/relay/{relay_id}"),
                     payload: EventPayload::AgentThought(relay_msg.to_string()),
+                    trace_id: None,
                 };
                 self.bus.publish(event).map(|_| ())
             }
@@ -212,6 +218,7 @@ impl MechAdapter for Ros2Adapter {
                     timestamp: Utc::now(),
                     source: "mechos-middleware::ros2/ask_human".to_string(),
                     payload: EventPayload::AgentThought(question.clone()),
+                    trace_id: None,
                 };
                 self.bus.publish(event).map(|_| ())
             }
@@ -233,6 +240,7 @@ impl MechAdapter for Ros2Adapter {
                         "mechos-middleware::ros2/fleet/robot/{target_robot_id}/inbox"
                     ),
                     payload: EventPayload::AgentThought(peer_msg.to_string()),
+                    trace_id: None,
                 };
                 self.bus.publish(event).map(|_| ())
             }
@@ -248,6 +256,7 @@ impl MechAdapter for Ros2Adapter {
                     timestamp: Utc::now(),
                     source: "mechos-middleware::ros2/fleet/communications".to_string(),
                     payload: EventPayload::AgentThought(broadcast_msg.to_string()),
+                    trace_id: None,
                 };
                 self.bus.publish(event).map(|_| ())
             }
@@ -269,6 +278,7 @@ impl MechAdapter for Ros2Adapter {
                     timestamp: Utc::now(),
                     source: "mechos-middleware::ros2/fleet/tasks".to_string(),
                     payload: EventPayload::AgentThought(task_msg.to_string()),
+                    trace_id: None,
                 };
                 self.bus.publish(event).map(|_| ())
             }
