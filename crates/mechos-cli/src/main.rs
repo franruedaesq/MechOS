@@ -23,28 +23,12 @@ use mechos_middleware::{EventBus, Topic};
 use mechos_types::{Event, EventPayload};
 
 fn main() {
-    // ── Structured logging ────────────────────────────────────────────────
-    // Initialise tracing-subscriber using RUST_LOG (defaults to "info").
-    // Set MECHOS_LOG_FORMAT=json to emit newline-delimited JSON logs suitable
-    // for log aggregators (e.g. Loki, Datadog, OpenTelemetry Collector).
-    // The CLI's user-facing output still uses println! for UX consistency.
-    let log_level = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&log_level));
-
-    if std::env::var("MECHOS_LOG_FORMAT").as_deref() == Ok("json") {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .with_target(true)
-            .json()
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .with_target(true)
-            .compact()
-            .init();
-    }
+    // ── Structured logging + OpenTelemetry pipeline ───────────────────────
+    // `init_tracing` sets up tracing-subscriber and, when
+    // OTEL_EXPORTER_OTLP_ENDPOINT is set, wires in the OTLP span exporter.
+    // The guard must live for the entire process so that spans are flushed on
+    // exit.
+    let _otel_guard = mechos_runtime::init_tracing("mechos");
 
     print_banner();
 

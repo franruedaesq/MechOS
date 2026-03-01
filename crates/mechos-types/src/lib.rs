@@ -57,13 +57,16 @@ pub struct Event {
     /// e.g., "mechos-middleware::ros2"
     pub source: String,
     pub payload: EventPayload,
-    /// W3C-compatible trace identifier propagated from the originating span.
+    /// W3C traceparent header propagated from the originating span.
     ///
     /// When an event is published through [`EventBus`] this field is
-    /// automatically populated with the current OpenTelemetry trace ID (hex
-    /// string) or, when no OTel provider is active, with the tracing span ID
-    /// (`"tracing:<id>"`).  Consumers can use this value to correlate bus
-    /// events with distributed traces.
+    /// automatically populated with the full W3C `traceparent` string
+    /// (`"00-{trace_id}-{span_id}-{flags}"`) extracted from the current
+    /// OpenTelemetry span context, or with `"tracing:<id>"` when no OTel
+    /// provider is active.  Consumers can use this value to re-link their own
+    /// spans to the originating trace and correlate the complete intent
+    /// lifecycle—from LLM generation, through Kernel validation, to HAL
+    /// execution—in any OTLP-compatible observability backend.
     ///
     /// Set to `None` when no span is active at publish time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
