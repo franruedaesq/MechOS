@@ -37,7 +37,7 @@ use governor::{Quota, RateLimiter};
 use mechos_types::{Event, EventPayload, MechError, TelemetryData};
 use serde_json;
 use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::{accept_async_with_config, tungstenite::{Message, protocol::WebSocketConfig}};
 use uuid::Uuid;
 use chrono::Utc;
 use tracing::{error, warn};
@@ -171,7 +171,9 @@ impl Ros2Bridge {
         stream: TcpStream,
         peer: SocketAddr,
     ) -> Result<(), MechError> {
-        let ws_stream = accept_async(stream).await.map_err(|e| {
+        let mut ws_config = WebSocketConfig::default();
+        ws_config.max_message_size = Some(MAX_INCOMING_PAYLOAD_BYTES);
+        let ws_stream = accept_async_with_config(stream, Some(ws_config)).await.map_err(|e| {
             MechError::Serialization(format!("ws handshake from {peer}: {e}"))
         })?;
 

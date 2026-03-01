@@ -17,7 +17,7 @@
 //! | [`Topic::SwarmComm`] | Peer-to-peer fleet messages |
 //! | [`Topic::CognitiveStream`] | LLM "thoughts" and `AskHuman` requests |
 
-use mechos_types::{Event, MechError};
+use mechos_types::{Event, EventPayload, MechError};
 use tokio::sync::broadcast;
 use tracing::warn;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -26,6 +26,56 @@ use opentelemetry::trace::TraceContextExt;
 /// Default channel capacity (number of buffered events before old ones are
 /// dropped for slow subscribers).
 const DEFAULT_CAPACITY: usize = 256;
+
+/// Maximum estimated serialized byte size of an [`Event`] placed on the bus.
+///
+/// This is a defense-in-depth limit: individual adapters and WebSocket
+/// handlers already enforce their own size limits before calling
+/// [`EventBus::publish`].  This constant acts as a final safety net to
+/// prevent memory exhaustion on the broadcast channels.
+pub const MAX_EVENT_PAYLOAD_BYTES: usize = 1024 * 1024; // 1 MiB
+
+/// Estimate the serialized JSON size of `event` without allocating a full
+/// JSON string.
+///
+/// The estimate is intentionally conservative (it may slightly over-count)
+/// to ensure the safety check errs on the side of caution.
+fn estimate_event_size(event: &Event) -> usize {
+    // Base overhead covers the fixed JSON fields present in every event:
+    //   "id":         UUID string (36 chars) + key + quotes + colon + comma = ~46
+    //   "timestamp":  ISO-8601 string (≈27 chars) + key + quotes = ~42
+    //   "source":     key + quotes + colon + comma = ~12 (content added below)
+    //   "payload":    key + quotes + colon = ~11
+    //   JSON object braces and outer punctuation = ~10
+    // Total structural overhead ≈ 121; rounded up to 200 as a safe margin
+    // that also covers optional "trace_id" when present.
+    let base = 200
+        + event.source.len()
+        + event.trace_id.as_deref().map_or(0, |t| t.len());
+
+    // Per-variant overhead: JSON field names, braces, quotes, colons and
+    // commas that wrap the payload-specific content.  60 bytes covers the
+    // structural JSON for any variant with two or fewer string fields.
+    const VARIANT_OVERHEAD: usize = 60;
+
+    let payload_size = match &event.payload {
+        EventPayload::Telemetry(_) => 120,
+        EventPayload::HardwareFault { component, message, .. } => {
+            component.len() + message.len() + VARIANT_OVERHEAD
+        }
+        EventPayload::AgentThought(s) => s.len(),
+        EventPayload::HumanResponse(s) => s.len(),
+        EventPayload::PeerMessage { from_robot_id, message } => {
+            from_robot_id.len() + message.len() + VARIANT_OVERHEAD
+        }
+        // Each f32 is at most ~15 ASCII chars in JSON ("3.4028235e38,").
+        // VARIANT_OVERHEAD covers "ranges", "angle_min_rad", "angle_increment_rad"
+        // field names, brackets, and punctuation.
+        EventPayload::LidarScan { ranges, .. } => ranges.len() * 15 + VARIANT_OVERHEAD,
+        EventPayload::AgentModeToggle { .. } => 30,
+    };
+    base + payload_size
+}
 
 /// Enumeration of all first-class routing topics on the event bus.
 ///
@@ -101,6 +151,13 @@ impl EventBus {
     /// current OpenTelemetry span context (or the tracing span ID when no
     /// OTel provider is active) if `trace_id` is `None`.
     pub fn publish_to(&self, topic: Topic, mut event: Event) -> Result<usize, MechError> {
+        // ── Payload size guard ─────────────────────────────────────────────
+        let size = estimate_event_size(&event);
+        if size > MAX_EVENT_PAYLOAD_BYTES {
+            return Err(MechError::Parsing(format!(
+                "event payload estimated at {size} bytes exceeds limit of {MAX_EVENT_PAYLOAD_BYTES}"
+            )));
+        }
         if event.trace_id.is_none() {
             event.trace_id = Self::current_trace_id();
         }
@@ -140,6 +197,13 @@ impl EventBus {
     /// current OpenTelemetry span context (or the tracing span ID when no
     /// OTel provider is active) if `trace_id` is `None`.
     pub fn publish(&self, mut event: Event) -> Result<usize, MechError> {
+        // ── Payload size guard ─────────────────────────────────────────────
+        let size = estimate_event_size(&event);
+        if size > MAX_EVENT_PAYLOAD_BYTES {
+            return Err(MechError::Parsing(format!(
+                "event payload estimated at {size} bytes exceeds limit of {MAX_EVENT_PAYLOAD_BYTES}"
+            )));
+        }
         if event.trace_id.is_none() {
             event.trace_id = Self::current_trace_id();
         }
@@ -343,6 +407,46 @@ mod tests {
         // No active receivers – send returns Err.
         let result = bus.publish(make_event("test"));
         assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Payload size guard tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn publish_oversized_agent_thought_returns_parsing_error() {
+        let bus = EventBus::default();
+        let huge = "x".repeat(MAX_EVENT_PAYLOAD_BYTES + 1);
+        let event = Event {
+            id: uuid::Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            source: "test".to_string(),
+            payload: EventPayload::AgentThought(huge),
+            trace_id: None,
+        };
+        let result = bus.publish(event);
+        assert!(
+            matches!(result, Err(MechError::Parsing(_))),
+            "expected Parsing error for oversized payload, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn publish_to_oversized_human_response_returns_parsing_error() {
+        let bus = EventBus::default();
+        let huge = "y".repeat(MAX_EVENT_PAYLOAD_BYTES + 1);
+        let event = Event {
+            id: uuid::Uuid::new_v4(),
+            timestamp: chrono::Utc::now(),
+            source: "test".to_string(),
+            payload: EventPayload::HumanResponse(huge),
+            trace_id: None,
+        };
+        let result = bus.publish_to(Topic::CognitiveStream, event);
+        assert!(
+            matches!(result, Err(MechError::Parsing(_))),
+            "expected Parsing error for oversized payload, got: {result:?}"
+        );
     }
 
     #[test]
