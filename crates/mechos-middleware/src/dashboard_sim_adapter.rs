@@ -23,6 +23,19 @@ use chrono::Utc;
 use crate::adapter::MechAdapter;
 use crate::bus::EventBus;
 
+/// Maximum number of LiDAR range readings accepted in a single simulated scan.
+///
+/// Payloads with more entries are rejected to prevent memory exhaustion from
+/// malformed or malicious simulation scan messages.  Mirrors the limit applied
+/// to physical laser scans in [`Ros2Adapter`][crate::ros2_adapter::Ros2Adapter].
+pub const MAX_SIM_LIDAR_RANGES: usize = 4096;
+
+/// Maximum byte length of a human-operator response string accepted from the
+/// simulation dashboard.
+///
+/// Responses longer than this are rejected before they reach the event bus.
+pub const MAX_HUMAN_RESPONSE_BYTES: usize = 64 * 1024; // 64 KiB
+
 /// Adapter that communicates with the React / Three.js simulation dashboard
 /// over a `rosbridge_server`-compatible WebSocket.
 pub struct DashboardSimAdapter {
@@ -68,6 +81,14 @@ impl DashboardSimAdapter {
         heading_rad: f32,
         battery_percent: u8,
     ) -> Result<usize, MechError> {
+        // ── Input validation ───────────────────────────────────────────────
+        if ranges.len() > MAX_SIM_LIDAR_RANGES {
+            return Err(MechError::Parsing(format!(
+                "simulated scan has {} range readings, exceeding the limit of {}",
+                ranges.len(),
+                MAX_SIM_LIDAR_RANGES,
+            )));
+        }
         let event = Event {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
@@ -119,11 +140,20 @@ impl DashboardSimAdapter {
         &self,
         response: impl Into<String>,
     ) -> Result<usize, MechError> {
+        let response = response.into();
+        // ── Input validation ───────────────────────────────────────────────
+        if response.len() > MAX_HUMAN_RESPONSE_BYTES {
+            return Err(MechError::Parsing(format!(
+                "human response is {} bytes, exceeding the limit of {}",
+                response.len(),
+                MAX_HUMAN_RESPONSE_BYTES,
+            )));
+        }
         let event = Event {
             id: Uuid::new_v4(),
             timestamp: Utc::now(),
             source: "mechos-middleware::dashboard/human_response".to_string(),
-            payload: EventPayload::HumanResponse(response.into()),
+            payload: EventPayload::HumanResponse(response),
             trace_id: None,
         };
         self.bus.publish(event)
@@ -428,6 +458,56 @@ mod tests {
         assert_eq!(event.source, "mechos-middleware::dashboard/human_response");
         if let EventPayload::HumanResponse(resp) = event.payload {
             assert_eq!(resp, "Yes, push it");
+        } else {
+            panic!("expected HumanResponse");
+        }
+    }
+
+    #[test]
+    fn ingest_sim_scan_rejects_oversized_ranges() {
+        let (_, adapter) = make_adapter();
+        let oversized_ranges: Vec<f32> = vec![1.0; MAX_SIM_LIDAR_RANGES + 1];
+        let result = adapter.ingest_sim_scan(&oversized_ranges, 0.0, 0.0, 0.0, 100);
+        assert!(
+            matches!(result, Err(MechError::Parsing(_))),
+            "expected Parsing error for oversized simulated LiDAR scan, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_sim_scan_at_limit_is_accepted() {
+        let (bus, adapter) = make_adapter();
+        let mut rx = bus.subscribe();
+
+        let max_ranges: Vec<f32> = vec![1.0; MAX_SIM_LIDAR_RANGES];
+        adapter.ingest_sim_scan(&max_ranges, 0.0, 0.0, 0.0, 100).unwrap();
+
+        let event = rx.recv().await.unwrap();
+        assert!(matches!(event.payload, EventPayload::Telemetry(_)));
+    }
+
+    #[test]
+    fn ingest_human_response_rejects_oversized_response() {
+        let (_, adapter) = make_adapter();
+        let oversized = "x".repeat(MAX_HUMAN_RESPONSE_BYTES + 1);
+        let result = adapter.ingest_human_response(oversized);
+        assert!(
+            matches!(result, Err(MechError::Parsing(_))),
+            "expected Parsing error for oversized human response, got: {result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ingest_human_response_at_limit_is_accepted() {
+        let (bus, adapter) = make_adapter();
+        let mut rx = bus.subscribe();
+
+        let at_limit = "y".repeat(MAX_HUMAN_RESPONSE_BYTES);
+        adapter.ingest_human_response(at_limit.clone()).unwrap();
+
+        let event = rx.recv().await.unwrap();
+        if let EventPayload::HumanResponse(resp) = event.payload {
+            assert_eq!(resp.len(), MAX_HUMAN_RESPONSE_BYTES);
         } else {
             panic!("expected HumanResponse");
         }

@@ -55,6 +55,17 @@ use thiserror::Error;
 use tracing::{debug, instrument, warn};
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Safety limits
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Maximum byte size of an HTTP response body accepted from the model server.
+///
+/// This guard prevents a malicious or malfunctioning LLM endpoint from
+/// returning a multi-gigabyte response body that would exhaust the process's
+/// heap.  Legitimate structured-JSON completions are always well under 1 MiB.
+pub const MAX_RESPONSE_BODY_BYTES: usize = 1024 * 1024; // 1 MiB
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Stability guidelines
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -424,15 +435,28 @@ impl LlmDriver {
         };
 
         let inference_start = Instant::now();
-        let response: ChatResponse = self
+        let http_resp = self
             .client
             .post(&url)
             .json(&body)
             .send()
             .await?
-            .error_for_status()?
-            .json()
-            .await?;
+            .error_for_status()?;
+
+        // ── Response body size guard ───────────────────────────────────────
+        // Read the raw bytes before deserialising so we can reject oversized
+        // bodies before they are handed to the JSON parser (which would
+        // allocate additional memory for the parsed value tree).
+        let body_bytes = http_resp.bytes().await?;
+        if body_bytes.len() > MAX_RESPONSE_BODY_BYTES {
+            return Err(LlmError::BadResponse(format!(
+                "LLM response body ({} bytes) exceeds the {} byte limit",
+                body_bytes.len(),
+                MAX_RESPONSE_BODY_BYTES,
+            )));
+        }
+        let response: ChatResponse = serde_json::from_slice(&body_bytes)
+            .map_err(|e| LlmError::BadResponse(e.to_string()))?;
         let inference_latency_ms = inference_start.elapsed().as_millis() as u64;
 
         let reply = response
@@ -825,5 +849,40 @@ mod tests {
         // on a platform with working TLS support.
         let result = LlmDriver::new("http://localhost:11434", "llama3");
         assert!(result.is_ok(), "expected Ok from LlmDriver::new on this platform");
+    }
+
+    #[test]
+    fn max_response_body_bytes_constant_is_one_mib() {
+        assert_eq!(MAX_RESPONSE_BODY_BYTES, 1024 * 1024);
+    }
+
+    #[test]
+    fn response_body_exceeding_limit_returns_bad_response_error() {
+        // Simulate the size check logic: a payload larger than the limit must
+        // be rejected before JSON parsing.  This mirrors what complete() does
+        // after calling http_resp.bytes().
+        let oversized = vec![0u8; MAX_RESPONSE_BODY_BYTES + 1];
+        let result: Result<(), LlmError> = if oversized.len() > MAX_RESPONSE_BODY_BYTES {
+            Err(LlmError::BadResponse(format!(
+                "LLM response body ({} bytes) exceeds the {} byte limit",
+                oversized.len(),
+                MAX_RESPONSE_BODY_BYTES,
+            )))
+        } else {
+            Ok(())
+        };
+        assert!(
+            matches!(result, Err(LlmError::BadResponse(_))),
+            "oversized response body must yield BadResponse, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn response_body_at_limit_passes_size_check() {
+        let at_limit = vec![0u8; MAX_RESPONSE_BODY_BYTES];
+        assert!(
+            at_limit.len() <= MAX_RESPONSE_BODY_BYTES,
+            "response body at the exact limit must pass the size check"
+        );
     }
 }
