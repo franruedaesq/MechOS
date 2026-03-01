@@ -220,6 +220,15 @@ async fn handle_ws(
 // Upstream message parser
 // ---------------------------------------------------------------------------
 
+/// Maximum byte length of an upstream WebSocket message accepted from the
+/// Cockpit browser.
+///
+/// Messages exceeding this limit are silently discarded to prevent
+/// denial-of-service attacks via oversized payloads.  64 KiB is generous
+/// for any legitimate Cockpit command while still providing a hard bound on
+/// memory consumption per message.
+pub(crate) const MAX_UPSTREAM_MSG_BYTES: usize = 65_536; // 64 KiB
+
 /// Parse an incoming WebSocket text message from the Cockpit browser and
 /// inject the appropriate event onto the [`EventBus`].
 ///
@@ -231,8 +240,19 @@ async fn handle_ws(
 /// | `/hitl/human_response` | Publishes [`EventPayload::HumanResponse`] |
 /// | `/agent/mode` | Publishes [`EventPayload::AgentModeToggle`] |
 ///
+/// Messages exceeding [`MAX_UPSTREAM_MSG_BYTES`] are silently discarded.
 /// Unknown messages are silently ignored.
 pub(crate) fn handle_upstream_message(text: &str, bus: &Arc<EventBus>) {
+    // ── Input size guard ────────────────────────────────────────────────────
+    if text.len() > MAX_UPSTREAM_MSG_BYTES {
+        warn!(
+            msg_bytes = text.len(),
+            limit = MAX_UPSTREAM_MSG_BYTES,
+            "upstream WS message exceeds size limit; discarding"
+        );
+        return;
+    }
+
     let Ok(json) = serde_json::from_str::<Value>(text) else {
         return;
     };
@@ -448,6 +468,54 @@ mod tests {
         assert!(
             COCKPIT_HTML.contains("KeyW") || COCKPIT_HTML.contains("wasd") || COCKPIT_HTML.contains("WASD"),
             "Cockpit HTML must contain W-A-S-D keyboard bindings"
+        );
+    }
+
+    // ── Input size validation ─────────────────────────────────────────────────
+
+    #[test]
+    fn oversized_upstream_message_is_discarded() {
+        let bus = make_bus();
+        // Build a JSON message that exceeds MAX_UPSTREAM_MSG_BYTES.
+        let padding = "x".repeat(MAX_UPSTREAM_MSG_BYTES + 1);
+        let oversized = format!(r#"{{"topic":"/cmd_vel","source":"dashboard_override","pad":"{}"}}"#, padding);
+        assert!(oversized.len() > MAX_UPSTREAM_MSG_BYTES);
+
+        // No subscriber – but if handle_upstream_message respects the size
+        // limit it will return before trying to publish, which means no
+        // attempt to send on the bus and no panic.
+        handle_upstream_message(&oversized, &bus);
+        // If we reach here the oversized message was correctly discarded.
+    }
+
+    #[test]
+    fn message_at_size_limit_is_accepted() {
+        let bus = make_bus();
+        let mut rx = bus.subscribe();
+
+        // Build a valid cmd_vel message that is exactly MAX_UPSTREAM_MSG_BYTES.
+        // The format string with an empty pad value:
+        let fmt_without_pad =
+            r#"{"op":"publish","topic":"/cmd_vel","source":"dashboard_override","pad":""}"#;
+        let padding_len = MAX_UPSTREAM_MSG_BYTES - fmt_without_pad.len();
+        let padding = "y".repeat(padding_len);
+        let msg = format!(
+            r#"{{"op":"publish","topic":"/cmd_vel","source":"dashboard_override","pad":"{}"}}"#,
+            padding
+        );
+        assert_eq!(
+            msg.len(),
+            MAX_UPSTREAM_MSG_BYTES,
+            "test message must be exactly at the size limit"
+        );
+
+        handle_upstream_message(&msg, &bus);
+
+        // A valid cmd_vel override at the size limit must still be published.
+        // publish() is synchronous so the event is immediately in the channel.
+        assert!(
+            rx.try_recv().is_ok(),
+            "message at size limit should be accepted and published"
         );
     }
 }

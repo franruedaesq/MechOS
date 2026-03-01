@@ -247,10 +247,18 @@ impl LlmDriver {
             NonZeroU32::new(rpm).expect("rpm is >= 1 after max(1) clamp above"),
         );
         let rate_limiter = Arc::new(RateLimiter::direct(quota));
+        // Enforce a TLS 1.2 minimum for all HTTPS connections made by this
+        // driver.  The application-level `is_secure_url` guard already rejects
+        // plaintext HTTP to non-localhost hosts; the TLS version floor adds a
+        // second layer of defence against protocol-downgrade attacks.
+        let client = reqwest::ClientBuilder::new()
+            .min_tls_version(reqwest::tls::Version::TLS_1_2)
+            .build()
+            .expect("failed to build reqwest client with TLS 1.2 minimum");
         Self {
             base_url: base_url.into(),
             model: model.into(),
-            client: reqwest::Client::new(),
+            client,
             total_tokens: Arc::new(AtomicU64::new(0)),
             token_budget,
             rate_limiter,
@@ -736,5 +744,14 @@ mod tests {
         let driver = LlmDriver::with_limits("http://localhost:11434", "llama3", 0, 100_000);
         // The bucket should have capacity for exactly 1 request per minute.
         assert!(driver.rate_limiter.check().is_ok());
+    }
+
+    #[test]
+    fn llm_driver_client_is_built_with_tls_minimum_without_panic() {
+        // Constructing a driver should succeed: the ClientBuilder with
+        // min_tls_version(TLS_1_2) must not panic or return an error.
+        let driver = LlmDriver::new("http://localhost:11434", "llama3");
+        // A non-zero model name confirms the struct was fully initialised.
+        assert!(!driver.model.is_empty());
     }
 }
