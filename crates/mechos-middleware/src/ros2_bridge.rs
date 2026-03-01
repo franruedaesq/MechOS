@@ -72,7 +72,7 @@ impl Ros2Bridge {
     pub fn new(bus: Arc<EventBus>) -> Self {
         let quota = Quota::per_second(
             NonZeroU32::new(MAX_INCOMING_MESSAGES_PER_SEC)
-                .expect("MAX_INCOMING_MESSAGES_PER_SEC is non-zero"),
+                .unwrap_or(NonZeroU32::MIN),
         );
         Self {
             bus,
