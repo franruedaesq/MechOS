@@ -45,6 +45,7 @@
 //! ```
 
 use mechos_types::{Capability, HardwareIntent, MechError};
+use tracing::instrument;
 
 use crate::capability_manager::CapabilityManager;
 use crate::state_verifier::StateVerifier;
@@ -85,6 +86,7 @@ impl KernelGate {
     ///
     /// - [`MechError::Unauthorized`] – agent is missing the required capability.
     /// - [`MechError::HardwareFault`] – a physical safety rule was violated.
+    #[instrument(name = "kernel_gate.authorize", skip(self), fields(agent_id, intent = ?intent))]
     pub fn authorize_and_verify(
         &self,
         agent_id: &str,
