@@ -15,7 +15,7 @@ use serde_json::Value;
 use tokio::io::AsyncWriteExt;
 use tracing::{error, info, warn};
 use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::{accept_async, tungstenite::Message};
+use tokio_tungstenite::{accept_async_with_config, tungstenite::{Message, protocol::WebSocketConfig}};
 use uuid::Uuid;
 use chrono::Utc;
 
@@ -169,7 +169,9 @@ async fn handle_ws(
     peer: SocketAddr,
     bus: Arc<EventBus>,
 ) -> Result<(), MechError> {
-    let ws_stream = accept_async(stream).await.map_err(|e| {
+    let mut ws_config = WebSocketConfig::default();
+    ws_config.max_message_size = Some(MAX_UPSTREAM_MSG_BYTES);
+    let ws_stream = accept_async_with_config(stream, Some(ws_config)).await.map_err(|e| {
         MechError::Serialization(format!("[mechos-cockpit] WS handshake from {peer}: {e}"))
     })?;
 
@@ -203,6 +205,15 @@ async fn handle_ws(
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
+                        if text.len() > MAX_UPSTREAM_MSG_BYTES {
+                            warn!(
+                                peer = %peer,
+                                msg_bytes = text.len(),
+                                limit = MAX_UPSTREAM_MSG_BYTES,
+                                "upstream WS message exceeds size limit; closing connection"
+                            );
+                            break;
+                        }
                         handle_upstream_message(text.as_str(), &bus);
                     }
                     Some(Ok(Message::Close(_))) | None => break,
