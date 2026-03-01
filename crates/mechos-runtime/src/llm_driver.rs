@@ -41,7 +41,7 @@
 
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
 use governor::clock::DefaultClock;
@@ -186,7 +186,10 @@ pub struct LlmDriver {
     /// Maximum tokens allowed before the circuit breaker trips.
     token_budget: u64,
     /// Token-bucket rate limiter (requests per minute).
-    rate_limiter: Arc<DirectRateLimiter>,
+    ///
+    /// Wrapped in `RwLock` so that [`set_rpm`][Self::set_rpm] can replace it
+    /// at runtime without rebuilding the whole driver.
+    rate_limiter: Arc<RwLock<DirectRateLimiter>>,
 }
 
 impl LlmDriver {
@@ -272,7 +275,7 @@ impl LlmDriver {
         // avoids any possibility of a panic without relying on that invariant.
         let rpm = NonZeroU32::new(rpm.max(1)).unwrap_or(NonZeroU32::MIN);
         let quota = Quota::per_minute(rpm);
-        let rate_limiter = Arc::new(RateLimiter::direct(quota));
+        let rate_limiter = Arc::new(RwLock::new(RateLimiter::direct(quota)));
         // Enforce a TLS 1.2 minimum for all HTTPS connections made by this
         // driver.  The application-level `is_secure_url` guard already rejects
         // plaintext HTTP to non-localhost hosts; the TLS version floor adds a
@@ -309,6 +312,22 @@ impl LlmDriver {
     /// Return the configured token budget.
     pub fn token_budget(&self) -> u64 {
         self.token_budget
+    }
+
+    /// Update the per-minute request rate limit at runtime.
+    ///
+    /// This replaces the internal token-bucket rate limiter with a new one
+    /// configured for `rpm` requests per minute.  A value of `0` is silently
+    /// clamped to `1`.
+    ///
+    /// This is safe to call while the driver is being used concurrently:
+    /// in-flight calls that already passed the old limiter are not affected;
+    /// the new limit takes effect for the next call that reaches the check.
+    pub fn set_rpm(&self, rpm: u32) {
+        let rpm = NonZeroU32::new(rpm.max(1)).unwrap_or(NonZeroU32::MIN);
+        let quota = Quota::per_minute(rpm);
+        let new_limiter = RateLimiter::direct(quota);
+        *self.rate_limiter.write().unwrap_or_else(|e| e.into_inner()) = new_limiter;
     }
 
     /// Send `messages` to the model and return the assistant's reply text.
@@ -355,7 +374,13 @@ impl LlmDriver {
         }
 
         // ── Rate limiter ───────────────────────────────────────────────────
-        if self.rate_limiter.check().is_err() {
+        if self
+            .rate_limiter
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .check()
+            .is_err()
+        {
             return Err(LlmError::RateLimitExceeded);
         }
 
@@ -693,7 +718,7 @@ mod tests {
         let driver = LlmDriver::with_rpm("http://localhost:11434", "llama3", 1).unwrap();
         // Exhaust the rate-limiter bucket by calling check() once.
         // (1 RPM = 1 token per 60 s; the bucket starts full with 1 token.)
-        let _ = driver.rate_limiter.check();
+        let _ = driver.rate_limiter.read().unwrap().check();
 
         let messages = [ChatMessage {
             role: Role::User,
@@ -770,7 +795,19 @@ mod tests {
         let driver = LlmDriver::with_limits("http://localhost:11434", "llama3", 0, 100_000)
             .unwrap();
         // The bucket should have capacity for exactly 1 request per minute.
-        assert!(driver.rate_limiter.check().is_ok());
+        assert!(driver.rate_limiter.read().unwrap().check().is_ok());
+    }
+
+    #[test]
+    fn set_rpm_updates_rate_limit_at_runtime() {
+        let driver = LlmDriver::with_rpm("http://localhost:11434", "llama3", 60).unwrap();
+        // Exhaust the current bucket (60 RPM = 60 tokens per minute).
+        // Reducing to 1 RPM means the new bucket starts with 1 token.
+        driver.set_rpm(1);
+        // After set_rpm(1), exactly 1 token is available.
+        assert!(driver.rate_limiter.read().unwrap().check().is_ok());
+        // Second check must fail (bucket exhausted).
+        assert!(driver.rate_limiter.read().unwrap().check().is_err());
     }
 
     #[test]

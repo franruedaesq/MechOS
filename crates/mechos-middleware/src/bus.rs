@@ -20,6 +20,8 @@
 use mechos_types::{Event, MechError};
 use tokio::sync::broadcast;
 use tracing::warn;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+use opentelemetry::trace::TraceContextExt;
 
 /// Default channel capacity (number of buffered events before old ones are
 /// dropped for slow subscribers).
@@ -94,7 +96,14 @@ impl EventBus {
     /// Returns the number of active receivers that were handed the event.
     /// Returns `Ok(0)` when no subscribers are currently listening on the
     /// topic (this is a normal condition, not an error).
-    pub fn publish_to(&self, topic: Topic, event: Event) -> Result<usize, MechError> {
+    ///
+    /// The event's `trace_id` field is automatically populated from the
+    /// current OpenTelemetry span context (or the tracing span ID when no
+    /// OTel provider is active) if `trace_id` is `None`.
+    pub fn publish_to(&self, topic: Topic, mut event: Event) -> Result<usize, MechError> {
+        if event.trace_id.is_none() {
+            event.trace_id = Self::current_trace_id();
+        }
         let sender = self.topic_sender(topic);
         match sender.send(event) {
             Ok(n) => Ok(n),
@@ -126,7 +135,14 @@ impl EventBus {
     ///
     /// Returns the number of receivers that received the event, or a
     /// [`MechError::Serialization`] error if the channel is closed.
-    pub fn publish(&self, event: Event) -> Result<usize, MechError> {
+    ///
+    /// The event's `trace_id` field is automatically populated from the
+    /// current OpenTelemetry span context (or the tracing span ID when no
+    /// OTel provider is active) if `trace_id` is `None`.
+    pub fn publish(&self, mut event: Event) -> Result<usize, MechError> {
+        if event.trace_id.is_none() {
+            event.trace_id = Self::current_trace_id();
+        }
         self.sender.send(event).map_err(|e| {
             MechError::Channel(format!("event bus send error: {e}"))
         })
@@ -161,6 +177,23 @@ impl EventBus {
             Topic::SwarmComm => &self.swarm_comm,
             Topic::CognitiveStream => &self.cognitive_stream,
         }
+    }
+
+    /// Extract a trace correlation ID from the currently active span.
+    ///
+    /// When an OpenTelemetry provider is active the W3C trace ID (a 32-char
+    /// lowercase hex string) is returned.  Otherwise the tracing-local span
+    /// ID is returned as `"tracing:<id>"`.  Returns `None` when no span is
+    /// currently active.
+    fn current_trace_id() -> Option<String> {
+        let span = tracing::Span::current();
+        let ctx = span.context();
+        let otel_span = ctx.span();
+        let sc = otel_span.span_context();
+        if sc.is_valid() {
+            return Some(sc.trace_id().to_string());
+        }
+        span.id().map(|id| format!("tracing:{id:?}"))
     }
 }
 
@@ -252,6 +285,7 @@ mod tests {
                 heading_rad: 0.0,
                 battery_percent: 90,
             }),
+            trace_id: None,
         }
     }
 

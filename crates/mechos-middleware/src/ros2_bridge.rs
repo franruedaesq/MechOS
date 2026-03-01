@@ -103,6 +103,7 @@ impl Ros2Bridge {
                 heading_rad,
                 battery_percent,
             }),
+            trace_id: None,
         };
         self.bus.publish(event)
     }
@@ -124,6 +125,7 @@ impl Ros2Bridge {
                 code,
                 message: message.into(),
             },
+            trace_id: None,
         };
         self.bus.publish(event)
     }
@@ -261,6 +263,7 @@ impl Ros2Bridge {
                 timestamp: Utc::now(),
                 source: "mechos-middleware::dashboard_override".to_string(),
                 payload: EventPayload::AgentThought(text.to_string()),
+                trace_id: None,
             };
             let _ = self.bus.publish(event);
             return;
@@ -278,6 +281,7 @@ impl Ros2Bridge {
                 timestamp: Utc::now(),
                 source: "mechos-middleware::dashboard/human_response".to_string(),
                 payload: EventPayload::HumanResponse(response.to_string()),
+                trace_id: None,
             };
             let _ = self.bus.publish(event);
         }

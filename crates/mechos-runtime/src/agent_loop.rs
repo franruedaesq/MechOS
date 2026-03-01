@@ -515,6 +515,7 @@ impl AgentLoop {
                     serde_json::to_string(&intent)
                         .unwrap_or_else(|_| "(serialisation error)".to_string()),
                 ),
+                trace_id: None,
             };
             // Best-effort publish – no subscribers is not an error.
             let _ = self.bus.publish(event);
@@ -629,6 +630,7 @@ impl AgentLoop {
             timestamp: chrono::Utc::now(),
             source: "mechos-kernel::manual_override".to_string(),
             payload: EventPayload::AgentThought(frame),
+            trace_id: None,
         }
     }
 
@@ -817,6 +819,7 @@ mod tests {
             timestamp: chrono::Utc::now(),
             source: "mechos-middleware::dashboard/human_response".to_string(),
             payload: EventPayload::HumanResponse("Yes, go ahead".to_string()),
+            trace_id: None,
         };
         let _ = agent.bus.publish(event);
         agent.drain_bus_events();
@@ -835,6 +838,7 @@ mod tests {
             timestamp: chrono::Utc::now(),
             source: "mechos-middleware::dashboard_override".to_string(),
             payload: EventPayload::AgentThought(override_json.to_string()),
+            trace_id: None,
         };
         let _ = agent.bus.publish(event);
         agent.drain_bus_events();
@@ -893,6 +897,7 @@ mod tests {
                 angle_min_rad: 0.0,
                 angle_increment_rad: 0.0,
             },
+            trace_id: None,
         };
         let _ = agent.bus.publish(event);
         agent.drain_bus_events();
@@ -916,6 +921,7 @@ mod tests {
                 angle_min_rad: 0.0,
                 angle_increment_rad: 0.1,
             },
+            trace_id: None,
         };
         let _ = agent.bus.publish(event);
         agent.drain_bus_events();
@@ -930,6 +936,7 @@ mod tests {
             timestamp: chrono::Utc::now(),
             source: "mechos-cockpit::server".to_string(),
             payload: EventPayload::AgentModeToggle { paused: true },
+            trace_id: None,
         };
         let _ = agent.bus.publish(event);
         agent.drain_bus_events();
@@ -945,6 +952,7 @@ mod tests {
             timestamp: chrono::Utc::now(),
             source: "mechos-cockpit::server".to_string(),
             payload: EventPayload::AgentModeToggle { paused: false },
+            trace_id: None,
         };
         let _ = agent.bus.publish(event);
         agent.drain_bus_events();
