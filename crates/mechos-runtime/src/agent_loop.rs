@@ -49,7 +49,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
@@ -137,7 +137,7 @@ pub struct AgentLoop {
     llm: LlmDriver,
     fusion: SensorFusion,
     octree: Octree,
-    memory: Arc<Mutex<EpisodicStore>>,
+    memory: EpisodicStore,
     bus: EventBus,
     gate: KernelGate,
     loop_guard: LoopGuard,
@@ -190,10 +190,10 @@ impl AgentLoop {
 
         // In-memory episodic store or persistent file-backed store.
         let memory = match config.memory_path {
-            Some(ref path) => Arc::new(Mutex::new(EpisodicStore::open(path)
-                .map_err(|e| MechError::Serialization(format!("failed to open episodic store at '{path}': {e}")))?)),
-            None => Arc::new(Mutex::new(EpisodicStore::open_in_memory()
-                .map_err(|e| MechError::Serialization(format!("failed to open in-memory episodic store: {e}")))?)),
+            Some(ref path) => EpisodicStore::open(path)
+                .map_err(|e| MechError::Serialization(format!("failed to open episodic store at '{path}': {e}")))?,
+            None => EpisodicStore::open_in_memory()
+                .map_err(|e| MechError::Serialization(format!("failed to open in-memory episodic store: {e}")))?,
         };
 
         let bus = config.bus.unwrap_or_default();
@@ -414,16 +414,7 @@ impl AgentLoop {
         // Retrieve the most recent episodic memories as context.
         let memory_context = {
             let _span = tracing::info_span!("ooda.orient").entered();
-            let memory_clone = Arc::clone(&self.memory);
-            let memories = tokio::task::spawn_blocking(move || {
-                memory_clone
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .all_entries()
-            })
-            .await
-            .unwrap_or_else(|_| Ok(vec![]))
-            .unwrap_or_default();
+            let memories = self.memory.all_entries().await.unwrap_or_default();
             let memory_entries: Vec<String> = memories
                 .iter()
                 .rev()

@@ -23,17 +23,20 @@
 //! ```rust
 //! use mechos_memory::episodic::{EpisodicStore, MemoryEntry};
 //!
-//! let store = EpisodicStore::open_in_memory().unwrap();
+//! #[tokio::main(flavor = "current_thread")]
+//! async fn main() {
+//!     let store = EpisodicStore::open_in_memory().unwrap();
 //!
-//! let entry = MemoryEntry::new(
-//!     "mechos-runtime".to_string(),
-//!     "The robot navigated around the desk.".to_string(),
-//!     vec![0.1, 0.9, 0.3],
-//! );
-//! store.store(&entry).unwrap();
+//!     let entry = MemoryEntry::new(
+//!         "mechos-runtime".to_string(),
+//!         "The robot navigated around the desk.".to_string(),
+//!         vec![0.1, 0.9, 0.3],
+//!     );
+//!     store.store(&entry).await.unwrap();
 //!
-//! let results = store.recall_similar(&[0.1, 0.9, 0.3], 5).unwrap();
-//! assert_eq!(results[0].0.id, entry.id);
+//!     let results = store.recall_similar(&[0.1, 0.9, 0.3], 5).await.unwrap();
+//!     assert_eq!(results[0].0.id, entry.id);
+//! }
 //! ```
 
 use chrono::{DateTime, Utc};
@@ -44,6 +47,7 @@ use uuid::Uuid;
 
 use std::cmp::Ordering as CmpOrdering;
 use std::collections::BinaryHeap;
+use std::sync::{Arc, Mutex};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Error type
@@ -56,6 +60,8 @@ pub enum EpisodicError {
     Sqlite(#[from] rusqlite::Error),
     #[error("Embedding vectors must be non-empty and equal in length")]
     DimensionMismatch,
+    #[error("blocking task panicked: {0}")]
+    TaskPanic(String),
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -174,15 +180,20 @@ impl Ord for HeapEntry {
 ///
 /// Persists [`MemoryEntry`] records to a local SQLite database and supports
 /// semantic retrieval via cosine-similarity ranking.
+#[derive(Clone)]
 pub struct EpisodicStore {
-    conn: Connection,
+    conn: Arc<Mutex<Connection>>,
 }
 
 impl EpisodicStore {
     /// Open (or create) a persistent SQLite database at `path`.
+    ///
+    /// Enables WAL (Write-Ahead Logging) mode so that concurrent readers are
+    /// not blocked by an active writer.
     pub fn open(path: &str) -> Result<Self, EpisodicError> {
         let conn = Connection::open(path)?;
-        let store = Self { conn };
+        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+        let store = Self { conn: Arc::new(Mutex::new(conn)) };
         store.init_schema()?;
         Ok(store)
     }
@@ -190,13 +201,14 @@ impl EpisodicStore {
     /// Open a temporary in-memory database (useful for testing).
     pub fn open_in_memory() -> Result<Self, EpisodicError> {
         let conn = Connection::open_in_memory()?;
-        let store = Self { conn };
+        let store = Self { conn: Arc::new(Mutex::new(conn)) };
         store.init_schema()?;
         Ok(store)
     }
 
     fn init_schema(&self) -> Result<(), EpisodicError> {
-        self.conn.execute_batch(
+        let conn = self.conn.lock().unwrap_or_else(|e| e.into_inner());
+        conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS episodic_memories (
                 id        TEXT NOT NULL PRIMARY KEY,
                 timestamp TEXT NOT NULL,
@@ -209,59 +221,69 @@ impl EpisodicStore {
     }
 
     /// Persist a [`MemoryEntry`] to the store.
-    pub fn store(&self, entry: &MemoryEntry) -> Result<(), EpisodicError> {
+    pub async fn store(&self, entry: &MemoryEntry) -> Result<(), EpisodicError> {
         if entry.embedding.is_empty() {
             return Err(EpisodicError::DimensionMismatch);
         }
+        let conn = Arc::clone(&self.conn);
         let blob = embedding_to_bytes(&entry.embedding);
-        self.conn.execute(
-            "INSERT OR REPLACE INTO episodic_memories
-                 (id, timestamp, source, summary, embedding)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![
-                entry.id.to_string(),
-                entry.timestamp.to_rfc3339(),
-                entry.source,
-                entry.summary,
-                blob,
-            ],
-        )?;
-        Ok(())
+        let id = entry.id.to_string();
+        let ts = entry.timestamp.to_rfc3339();
+        let source = entry.source.clone();
+        let summary = entry.summary.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
+            conn.execute(
+                "INSERT OR REPLACE INTO episodic_memories
+                     (id, timestamp, source, summary, embedding)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id, ts, source, summary, blob],
+            )?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| EpisodicError::TaskPanic(e.to_string()))?
     }
 
     /// Retrieve all stored entries ordered by timestamp (oldest first).
-    pub fn all_entries(&self) -> Result<Vec<MemoryEntry>, EpisodicError> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, timestamp, source, summary, embedding
-             FROM episodic_memories
-             ORDER BY timestamp ASC",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            let id_str: String = row.get(0)?;
-            let ts_str: String = row.get(1)?;
-            let source: String = row.get(2)?;
-            let summary: String = row.get(3)?;
-            let blob: Vec<u8> = row.get(4)?;
-            Ok((id_str, ts_str, source, summary, blob))
-        })?;
-
-        let mut entries = Vec::new();
-        for row in rows {
-            let (id_str, ts_str, source, summary, blob) = row?;
-            let id = Uuid::parse_str(&id_str)
-                .map_err(|e| rusqlite::Error::InvalidColumnType(0, e.to_string(), rusqlite::types::Type::Text))?;
-            let timestamp = ts_str.parse::<DateTime<Utc>>().map_err(|e| {
-                rusqlite::Error::InvalidColumnType(1, e.to_string(), rusqlite::types::Type::Text)
+    pub async fn all_entries(&self) -> Result<Vec<MemoryEntry>, EpisodicError> {
+        let conn = Arc::clone(&self.conn);
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().unwrap_or_else(|e| e.into_inner());
+            let mut stmt = conn.prepare(
+                "SELECT id, timestamp, source, summary, embedding
+                 FROM episodic_memories
+                 ORDER BY timestamp ASC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                let id_str: String = row.get(0)?;
+                let ts_str: String = row.get(1)?;
+                let source: String = row.get(2)?;
+                let summary: String = row.get(3)?;
+                let blob: Vec<u8> = row.get(4)?;
+                Ok((id_str, ts_str, source, summary, blob))
             })?;
-            entries.push(MemoryEntry {
-                id,
-                timestamp,
-                source,
-                summary,
-                embedding: bytes_to_embedding(&blob),
-            });
-        }
-        Ok(entries)
+
+            let mut entries = Vec::new();
+            for row in rows {
+                let (id_str, ts_str, source, summary, blob) = row?;
+                let id = Uuid::parse_str(&id_str)
+                    .map_err(|e| rusqlite::Error::InvalidColumnType(0, e.to_string(), rusqlite::types::Type::Text))?;
+                let timestamp = ts_str.parse::<DateTime<Utc>>().map_err(|e| {
+                    rusqlite::Error::InvalidColumnType(1, e.to_string(), rusqlite::types::Type::Text)
+                })?;
+                entries.push(MemoryEntry {
+                    id,
+                    timestamp,
+                    source,
+                    summary,
+                    embedding: bytes_to_embedding(&blob),
+                });
+            }
+            Ok(entries)
+        })
+        .await
+        .map_err(|e| EpisodicError::TaskPanic(e.to_string()))?
     }
 
     /// Return the `top_k` most similar entries to `query_embedding`, ranked by
@@ -274,7 +296,7 @@ impl EpisodicStore {
     ///
     /// Returns [`EpisodicError::DimensionMismatch`] if `query_embedding` is
     /// empty or any stored embedding has a different dimension.
-    pub fn recall_similar(
+    pub async fn recall_similar(
         &self,
         query_embedding: &[f32],
         top_k: usize,
@@ -285,17 +307,18 @@ impl EpisodicStore {
         if top_k == 0 {
             return Ok(vec![]);
         }
-        let entries = self.all_entries()?;
+        let entries = self.all_entries().await?;
+        let query = query_embedding.to_vec();
 
         // Min-heap of capacity `top_k`: the entry with the lowest similarity
         // sits at the top and is replaced when a better candidate arrives.
         let mut heap: BinaryHeap<HeapEntry> = BinaryHeap::with_capacity(top_k + 1);
 
         for entry in entries {
-            if entry.embedding.len() != query_embedding.len() {
+            if entry.embedding.len() != query.len() {
                 continue;
             }
-            let score = cosine_similarity(&entry.embedding, query_embedding);
+            let score = cosine_similarity(&entry.embedding, &query);
             if heap.len() < top_k {
                 heap.push(HeapEntry(entry, score));
             } else if let Some(worst) = heap.peek()
@@ -366,53 +389,53 @@ mod tests {
 
     // ── EpisodicStore ─────────────────────────────────────────────────────────
 
-    #[test]
-    fn store_and_retrieve_all_entries() {
+    #[tokio::test]
+    async fn store_and_retrieve_all_entries() {
         let store = EpisodicStore::open_in_memory().unwrap();
         let e1 = make_entry("src-a", "first memory", vec![1.0, 0.0]);
         let e2 = make_entry("src-b", "second memory", vec![0.0, 1.0]);
-        store.store(&e1).unwrap();
-        store.store(&e2).unwrap();
+        store.store(&e1).await.unwrap();
+        store.store(&e2).await.unwrap();
 
-        let all = store.all_entries().unwrap();
+        let all = store.all_entries().await.unwrap();
         assert_eq!(all.len(), 2);
     }
 
-    #[test]
-    fn recall_similar_returns_best_match() {
+    #[tokio::test]
+    async fn recall_similar_returns_best_match() {
         let store = EpisodicStore::open_in_memory().unwrap();
         let near = make_entry("rt", "near", vec![1.0f32, 0.0, 0.0]);
         let far = make_entry("rt", "far", vec![0.0f32, 0.0, 1.0]);
-        store.store(&near).unwrap();
-        store.store(&far).unwrap();
+        store.store(&near).await.unwrap();
+        store.store(&far).await.unwrap();
 
         let query = [1.0f32, 0.0, 0.0];
-        let results = store.recall_similar(&query, 1).unwrap();
+        let results = store.recall_similar(&query, 1).await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0.id, near.id);
         assert!((results[0].1 - 1.0).abs() < 1e-6);
     }
 
-    #[test]
-    fn recall_similar_top_k_limits_results() {
+    #[tokio::test]
+    async fn recall_similar_top_k_limits_results() {
         let store = EpisodicStore::open_in_memory().unwrap();
         for i in 0..5 {
             let e = make_entry("rt", &format!("mem {i}"), vec![i as f32, 1.0]);
-            store.store(&e).unwrap();
+            store.store(&e).await.unwrap();
         }
-        let results = store.recall_similar(&[2.0, 1.0], 3).unwrap();
+        let results = store.recall_similar(&[2.0, 1.0], 3).await.unwrap();
         assert_eq!(results.len(), 3);
     }
 
-    #[test]
-    fn recall_similar_empty_query_returns_error() {
+    #[tokio::test]
+    async fn recall_similar_empty_query_returns_error() {
         let store = EpisodicStore::open_in_memory().unwrap();
-        let err = store.recall_similar(&[], 5).unwrap_err();
+        let err = store.recall_similar(&[], 5).await.unwrap_err();
         assert!(matches!(err, EpisodicError::DimensionMismatch));
     }
 
-    #[test]
-    fn store_empty_embedding_returns_error() {
+    #[tokio::test]
+    async fn store_empty_embedding_returns_error() {
         let store = EpisodicStore::open_in_memory().unwrap();
         let e = MemoryEntry {
             id: Uuid::new_v4(),
@@ -421,38 +444,38 @@ mod tests {
             summary: "no embedding".to_string(),
             embedding: vec![],
         };
-        let err = store.store(&e).unwrap_err();
+        let err = store.store(&e).await.unwrap_err();
         assert!(matches!(err, EpisodicError::DimensionMismatch));
     }
 
-    #[test]
-    fn recall_skips_dimension_mismatched_entries() {
+    #[tokio::test]
+    async fn recall_skips_dimension_mismatched_entries() {
         let store = EpisodicStore::open_in_memory().unwrap();
         // Store a 3-dimensional entry
         let e = make_entry("rt", "3d", vec![1.0, 0.0, 0.0]);
-        store.store(&e).unwrap();
+        store.store(&e).await.unwrap();
         // Query with a 2-dimensional vector – no match should be returned
-        let results = store.recall_similar(&[1.0, 0.0], 5).unwrap();
+        let results = store.recall_similar(&[1.0, 0.0], 5).await.unwrap();
         assert_eq!(results.len(), 0);
     }
 
-    #[test]
-    fn duplicate_id_replaced_on_store() {
+    #[tokio::test]
+    async fn duplicate_id_replaced_on_store() {
         let store = EpisodicStore::open_in_memory().unwrap();
         let mut e = make_entry("rt", "original", vec![1.0, 0.0]);
-        store.store(&e).unwrap();
+        store.store(&e).await.unwrap();
         e.summary = "updated".to_string();
-        store.store(&e).unwrap(); // INSERT OR REPLACE
+        store.store(&e).await.unwrap(); // INSERT OR REPLACE
 
-        let all = store.all_entries().unwrap();
+        let all = store.all_entries().await.unwrap();
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].summary, "updated");
     }
 
-    #[test]
-    fn all_entries_empty_store_returns_empty_vec() {
+    #[tokio::test]
+    async fn all_entries_empty_store_returns_empty_vec() {
         let store = EpisodicStore::open_in_memory().unwrap();
-        let all = store.all_entries().unwrap();
+        let all = store.all_entries().await.unwrap();
         assert!(all.is_empty());
     }
 }
