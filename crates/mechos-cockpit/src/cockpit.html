@@ -180,6 +180,17 @@
                   display: flex; flex-direction: column; gap: 0.3rem; pointer-events: none; }
   .legend-item { display: flex; align-items: center; gap: 0.5rem; }
   .legend-swatch { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
+  /* Camera tab */
+  #tab-camera { overflow: auto; align-items: center; justify-content: center; }
+  .camera-layout { display: flex; flex-direction: column; align-items: center;
+                   padding: 0.75rem; gap: 0.75rem; width: 100%; max-width: 900px;
+                   margin: 0 auto; }
+  .camera-viewport { background: #000; display: flex; align-items: center;
+                     justify-content: center; border-radius: 6px; overflow: hidden;
+                     min-height: 240px; width: 100%; }
+  #camera-img { max-width: 100%; max-height: 60vh; display: block; }
+  .camera-placeholder { color: var(--text-dim); font-size: 0.85rem; text-align: center;
+                        padding: 2rem; }
   /* Config tab */
   #tab-config { overflow: auto; }
   .config-layout { display: flex; gap: 0.75rem; padding: 0.75rem; flex: 1; min-height: 0; }
@@ -240,6 +251,7 @@
 <nav class="tab-bar">
   <button class="tab-btn active" data-tab="dashboard">&#128202; Dashboard</button>
   <button class="tab-btn" data-tab="3dview">&#128506; 3D View</button>
+  <button class="tab-btn" data-tab="camera">&#128247; Camera</button>
   <button class="tab-btn" data-tab="config">&#9881; Config</button>
 </nav>
 
@@ -418,6 +430,29 @@
   </div>
 </div>
 
+<!-- Camera Tab -->
+<div id="tab-camera" class="tab-panel">
+  <div class="camera-layout">
+    <div class="panel" style="width:100%">
+      <div class="panel-title">
+        <span>&#128247; Camera Feed</span>
+        <span id="camera-status" style="font-size:.65rem;color:var(--text-dim)">Idle</span>
+      </div>
+      <div class="camera-viewport">
+        <img id="camera-img" alt="" style="display:none"/>
+        <div class="camera-placeholder" id="camera-placeholder">
+          &#128247; Camera feed will appear here when the camera tab is active.<br>
+          <span style="font-size:.75rem">Frames are fetched from <code style="color:var(--accent)">/frame</code> on this server.</span>
+        </div>
+      </div>
+      <div style="padding:.4rem .75rem;font-size:.72rem;color:var(--text-dim);font-family:var(--mono);border-top:1px solid var(--border)">
+        Source: <span style="color:var(--accent)">/frame</span>
+        &nbsp;&#183;&nbsp; <span id="camera-fps-label">0 fps</span>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Config Tab -->
 <div id="tab-config" class="tab-panel">
   <div class="config-layout">
@@ -511,6 +546,7 @@ document.querySelectorAll('.tab-btn').forEach(function(btn) {
     document.getElementById('tab-' + tab).classList.add('active');
     if (tab === '3dview' && !threeInitialized) { initThreeJS(); }
     if (tab === 'config') { loadConfig(); }
+    if (tab === 'camera') { startCameraFeed(); } else { stopCameraFeed(); }
   });
 });
 
@@ -1193,6 +1229,56 @@ document.getElementById('btn-ollama-test').addEventListener('click', function() 
 // Animation loop (60 FPS)
 // =========================================================================
 function loop() { renderSensor(); drawJoystick(); requestAnimationFrame(loop); }
+
+// =========================================================================
+// Camera feed
+// =========================================================================
+var cameraInterval = null;
+var cameraFrameCount = 0;
+var cameraFpsCount = 0;
+
+function startCameraFeed() {
+  cameraFrameCount = 0;
+  cameraFpsCount = 0;
+  var status = document.getElementById('camera-status');
+  if (status) status.textContent = 'Connecting\u2026';
+  if (cameraInterval) return;
+  refreshCameraFrame();
+  cameraInterval = setInterval(refreshCameraFrame, 200); // Poll at 5 FPS
+}
+
+function stopCameraFeed() {
+  if (cameraInterval) { clearInterval(cameraInterval); cameraInterval = null; }
+}
+
+function refreshCameraFrame() {
+  var img = document.getElementById('camera-img');
+  var placeholder = document.getElementById('camera-placeholder');
+  if (!img) return;
+  var tmp = new Image();
+  tmp.onload = function() {
+    img.src = tmp.src;
+    img.style.display = 'block';
+    if (placeholder) placeholder.style.display = 'none';
+    cameraFrameCount++;
+    cameraFpsCount++;
+    var status = document.getElementById('camera-status');
+    if (status) status.textContent = 'Live \u00B7 frame ' + cameraFrameCount;
+  };
+  tmp.onerror = function() {
+    img.style.display = 'none';
+    if (placeholder) placeholder.style.display = '';
+    var status = document.getElementById('camera-status');
+    if (status) status.textContent = 'Unavailable';
+  };
+  tmp.src = '/frame?_t=' + Date.now();
+}
+
+setInterval(function() {
+  var fpsLabel = document.getElementById('camera-fps-label');
+  if (fpsLabel) fpsLabel.textContent = cameraFpsCount + ' fps';
+  cameraFpsCount = 0;
+}, 1000);
 
 // =========================================================================
 // Boot

@@ -261,6 +261,13 @@ fn cmd_settings() {
     cfg.webui_port = port;
 
     println!(
+        "  Camera port    : {} (0 = disabled)",
+        cfg.camera_port.to_string().yellow()
+    );
+    let port = prompt_u16(&format!("  Camera port    [{}]: ", cfg.camera_port), cfg.camera_port);
+    cfg.camera_port = port;
+
+    println!(
         "  AI provider    : {} (ollama / openai / anthropic)",
         cfg.ai_provider.to_string().yellow()
     );
@@ -382,6 +389,24 @@ fn cmd_connections() {
         "🔴".red(),
         "not detected (hardware driver not loaded)".dimmed()
     );
+
+    // Camera server
+    if cfg.camera_port > 0 {
+        println!(
+            "  {} Camera server configured at {}",
+            "🟡".yellow(),
+            format!("http://localhost:{}/frame", cfg.camera_port).bold()
+        );
+        println!(
+            "     (proxied through Cockpit at /frame when /start is executed)"
+        );
+    } else {
+        println!(
+            "  {} Camera: {}",
+            "⚪".dimmed(),
+            "not configured (set camera_port in /settings to enable)".dimmed()
+        );
+    }
 }
 
 fn cmd_start(shutdown: Arc<AtomicBool>, state: &mut ReplState) {
@@ -449,6 +474,7 @@ fn cmd_start(shutdown: Arc<AtomicBool>, state: &mut ReplState) {
     // ── Step 5 – Cockpit Web UI ────────────────────────────────────────────
     {
         let webui_port = cfg.webui_port;
+        let camera_port = cfg.camera_port;
         let bus_for_cockpit = bus.clone();
         print!(
             "  [5/7] {} {} … ",
@@ -468,14 +494,21 @@ fn cmd_start(shutdown: Arc<AtomicBool>, state: &mut ReplState) {
                 }
             };
             rt.block_on(async move {
-                let server = mechos_cockpit::CockpitServer::new(bus_for_cockpit)
+                let mut server = mechos_cockpit::CockpitServer::new(bus_for_cockpit)
                     .with_port(webui_port);
+                if camera_port > 0 {
+                    server = server.with_camera_port(camera_port);
+                }
                 if let Err(e) = server.run().await {
                     tracing::error!(error = %e, "Cockpit server failed");
                 }
             });
         });
-        println!("{} (http://localhost:{})", "OK".green(), webui_port);
+        if camera_port > 0 {
+            println!("{} (http://localhost:{}) · camera feed: /frame → port {}", "OK".green(), webui_port, camera_port);
+        } else {
+            println!("{} (http://localhost:{})", "OK".green(), webui_port);
+        }
     }
 
     // ── Step 6 – Runtime Brain ─────────────────────────────────────────────

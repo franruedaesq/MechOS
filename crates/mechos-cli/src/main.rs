@@ -164,6 +164,15 @@ fn run_first_run_wizard() {
         cfg.webui_port = p;
     }
 
+    // Camera port
+    let port_str = prompt_line(
+        &format!("  Camera server port (0 = disabled) [{}]: ", cfg.camera_port),
+        &cfg.camera_port.to_string(),
+    );
+    if let Ok(p) = port_str.trim().parse::<u16>() {
+        cfg.camera_port = p;
+    }
+
     match config::save(&cfg) {
         Ok(()) => println!(
             "\n  {} Config saved to {}\n",
