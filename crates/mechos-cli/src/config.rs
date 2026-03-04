@@ -37,6 +37,12 @@ pub struct Config {
     #[serde(default = "default_webui_port")]
     pub webui_port: u16,
 
+    /// HTTP port of the external camera server that serves JPEG frames at
+    /// `http://localhost:{camera_port}/frame`.  Set to `0` to disable the
+    /// camera feed (default).
+    #[serde(default = "default_camera_port")]
+    pub camera_port: u16,
+
     /// Chosen AI provider.
     #[serde(default)]
     pub ai_provider: AiProvider,
@@ -64,6 +70,7 @@ impl std::fmt::Debug for Config {
         f.debug_struct("Config")
             .field("dashboard_port", &self.dashboard_port)
             .field("webui_port", &self.webui_port)
+            .field("camera_port", &self.camera_port)
             .field("ai_provider", &self.ai_provider)
             .field("active_model", &self.active_model)
             .field("ollama_url", &self.ollama_url)
@@ -85,6 +92,9 @@ fn default_dashboard_port() -> u16 {
 fn default_webui_port() -> u16 {
     8080
 }
+fn default_camera_port() -> u16 {
+    0
+}
 fn default_model() -> String {
     "llama3".to_string()
 }
@@ -97,6 +107,7 @@ impl Default for Config {
         Self {
             dashboard_port: default_dashboard_port(),
             webui_port: default_webui_port(),
+            camera_port: default_camera_port(),
             ai_provider: AiProvider::default(),
             active_model: default_model(),
             ollama_url: default_ollama_url(),
@@ -149,6 +160,7 @@ pub(crate) fn load_from(path: &PathBuf) -> Result<Option<Config>, String> {
 /// | `MECHOS_MODEL` | `active_model` |
 /// | `MECHOS_DASHBOARD_PORT` | `dashboard_port` |
 /// | `MECHOS_WEBUI_PORT` | `webui_port` |
+/// | `MECHOS_CAMERA_PORT` | `camera_port` |
 /// | `MECHOS_OPENAI_API_KEY` | `openai_api_key` |
 /// | `MECHOS_ANTHROPIC_API_KEY` | `anthropic_api_key` |
 ///
@@ -169,6 +181,10 @@ pub fn apply_env_overrides(cfg: &mut Config) {
     if let Ok(v) = std::env::var("MECHOS_WEBUI_PORT")
         && let Ok(port) = v.parse::<u16>() {
             cfg.webui_port = port;
+        }
+    if let Ok(v) = std::env::var("MECHOS_CAMERA_PORT")
+        && let Ok(port) = v.parse::<u16>() {
+            cfg.camera_port = port;
         }
     if let Ok(v) = std::env::var("MECHOS_OPENAI_API_KEY") {
         cfg.openai_api_key = v;
@@ -274,6 +290,7 @@ mod tests {
         let loaded = load_from(&path).expect("load ok").expect("some");
         assert_eq!(loaded.dashboard_port, 9090);
         assert_eq!(loaded.webui_port, 8080);
+        assert_eq!(loaded.camera_port, 0);
         assert_eq!(loaded.active_model, "llama3");
         assert_eq!(loaded.ai_provider, AiProvider::Ollama);
     }
@@ -362,5 +379,31 @@ mod tests {
         apply_env_overrides(&mut cfg);
         assert_eq!(cfg.anthropic_api_key, "ant-test-key");
         unsafe { std::env::remove_var("MECHOS_ANTHROPIC_API_KEY") };
+    }
+
+    #[test]
+    fn default_camera_port_is_zero() {
+        let cfg = Config::default();
+        assert_eq!(cfg.camera_port, 0, "default camera_port must be 0 (disabled)");
+    }
+
+    #[test]
+    fn apply_env_overrides_changes_camera_port() {
+        // SAFETY: single-threaded test; no data races on env vars.
+        unsafe { std::env::set_var("MECHOS_CAMERA_PORT", "8554") };
+        let mut cfg = Config::default();
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.camera_port, 8554);
+        unsafe { std::env::remove_var("MECHOS_CAMERA_PORT") };
+    }
+
+    #[test]
+    fn apply_env_overrides_ignores_invalid_camera_port() {
+        // SAFETY: single-threaded test; no data races on env vars.
+        unsafe { std::env::set_var("MECHOS_CAMERA_PORT", "not-a-port") };
+        let mut cfg = Config::default();
+        apply_env_overrides(&mut cfg);
+        assert_eq!(cfg.camera_port, 0);
+        unsafe { std::env::remove_var("MECHOS_CAMERA_PORT") };
     }
 }

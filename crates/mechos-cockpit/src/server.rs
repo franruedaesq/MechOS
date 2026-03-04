@@ -51,6 +51,9 @@ const COCKPIT_HTML: &str = include_str!("cockpit.html");
 pub struct CockpitServer {
     bus: Arc<EventBus>,
     port: u16,
+    /// When `Some(port)`, GET /frame requests are proxied to
+    /// `http://127.0.0.1:{port}/frame` on the external camera server.
+    camera_port: Option<u16>,
 }
 
 impl CockpitServer {
@@ -59,6 +62,7 @@ impl CockpitServer {
         Self {
             bus,
             port: DEFAULT_PORT,
+            camera_port: None,
         }
     }
 
@@ -68,9 +72,25 @@ impl CockpitServer {
         self
     }
 
+    /// Enable the camera frame proxy endpoint (`GET /frame`) by providing the
+    /// TCP port of the external camera HTTP server.
+    ///
+    /// When set, every `GET /frame` request received by the Cockpit server is
+    /// forwarded to `http://127.0.0.1:{camera_port}/frame` and the response is
+    /// relayed back to the browser.
+    pub fn with_camera_port(mut self, camera_port: u16) -> Self {
+        self.camera_port = Some(camera_port);
+        self
+    }
+
     /// Return the configured port.
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// Return the configured camera port, if any.
+    pub fn camera_port(&self) -> Option<u16> {
+        self.camera_port
     }
 
     /// Start the server.
@@ -94,8 +114,9 @@ impl CockpitServer {
             match listener.accept().await {
                 Ok((stream, peer)) => {
                     let bus = Arc::clone(&self.bus);
+                    let camera_port = self.camera_port;
                     tokio::spawn(async move {
-                        if let Err(e) = handle_connection(stream, peer, bus).await {
+                        if let Err(e) = handle_connection(stream, peer, bus, camera_port).await {
                             error!(peer = %peer, error = %e, "client connection error");
                         }
                     });
@@ -116,6 +137,7 @@ async fn handle_connection(
     stream: TcpStream,
     peer: SocketAddr,
     bus: Arc<EventBus>,
+    camera_port: Option<u16>,
 ) -> Result<(), MechError> {
     // Peek at the first bytes of the request to decide whether to upgrade
     // to WebSocket or serve the static HTML.  `peek` does not consume the
@@ -134,6 +156,8 @@ async fn handle_connection(
 
     if is_ws_upgrade {
         handle_ws(stream, peer, bus).await
+    } else if first_line.starts_with("GET /frame") {
+        serve_camera_frame(stream, camera_port).await
     } else if first_line.starts_with("GET /api/config") {
         serve_config_get(stream).await
     } else if first_line.starts_with("POST /api/config") {
@@ -251,6 +275,104 @@ fn mechos_config_path() -> std::path::PathBuf {
         .or_else(|_| std::env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
     std::path::PathBuf::from(home).join(".mechos").join("config.toml")
+}
+
+// ---------------------------------------------------------------------------
+// Camera frame proxy – forward GET /frame to the external camera server
+// ---------------------------------------------------------------------------
+
+/// Proxy a `GET /frame` request to the external camera HTTP server.
+///
+/// When `camera_port` is `None` (camera not configured) a `503` response is
+/// returned immediately.  Otherwise the request is forwarded to
+/// `http://127.0.0.1:{camera_port}/frame` using a raw HTTP/1.0 connection and
+/// the full response (headers + body) is relayed back to the browser client.
+async fn serve_camera_frame(mut stream: TcpStream, camera_port: Option<u16>) -> Result<(), MechError> {
+    let Some(port) = camera_port else {
+        let body = "Camera not configured";
+        let response = format!(
+            "HTTP/1.1 503 Service Unavailable\r\n\
+             Content-Type: text/plain; charset=utf-8\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\
+             \r\n\
+             {}",
+            body.len(),
+            body
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .map_err(|e| MechError::Serialization(format!("HTTP write error: {e}")))?;
+        return Ok(());
+    };
+
+    let camera_addr = SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, port));
+    let mut cam_stream = match tokio::net::TcpStream::connect(camera_addr).await {
+        Ok(s) => s,
+        Err(e) => {
+            let body = format!("Camera server unavailable: {e}");
+            let response = format!(
+                "HTTP/1.1 503 Service Unavailable\r\n\
+                 Content-Type: text/plain; charset=utf-8\r\n\
+                 Content-Length: {}\r\n\
+                 Connection: close\r\n\
+                 \r\n\
+                 {}",
+                body.len(),
+                body
+            );
+            if let Err(we) = stream.write_all(response.as_bytes()).await {
+                warn!("camera 503 write error: {we}");
+            }
+            return Ok(());
+        }
+    };
+
+    // Forward GET /frame to the camera server using HTTP/1.0 (connection
+    // closes after the single response, so read_to_end terminates cleanly).
+    let request = format!(
+        "GET /frame HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+    );
+    if cam_stream.write_all(request.as_bytes()).await.is_err() {
+        let body = "Camera server write error";
+        let response = format!(
+            "HTTP/1.1 502 Bad Gateway\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        if let Err(we) = stream.write_all(response.as_bytes()).await {
+            warn!("camera 502 write error: {we}");
+        }
+        return Ok(());
+    }
+
+    // Read the complete response from the camera server and relay it verbatim.
+    let mut buf: Vec<u8> = Vec::new();
+    if tokio::io::AsyncReadExt::read_to_end(&mut cam_stream, &mut buf)
+        .await
+        .is_err()
+        || buf.is_empty()
+    {
+        let body = "Camera server read error";
+        let response = format!(
+            "HTTP/1.1 502 Bad Gateway\r\n\
+             Content-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        if let Err(we) = stream.write_all(response.as_bytes()).await {
+            warn!("camera 502 write error: {we}");
+        }
+        return Ok(());
+    }
+
+    stream
+        .write_all(&buf)
+        .await
+        .map_err(|e| MechError::Serialization(format!("camera proxy write error: {e}")))?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -467,6 +589,20 @@ mod tests {
         assert_eq!(server.port(), 9999);
     }
 
+    #[test]
+    fn default_camera_port_is_none() {
+        let bus = make_bus();
+        let server = CockpitServer::new(bus);
+        assert_eq!(server.camera_port(), None, "camera_port must default to None");
+    }
+
+    #[test]
+    fn with_camera_port_stores_port() {
+        let bus = make_bus();
+        let server = CockpitServer::new(bus).with_camera_port(8554);
+        assert_eq!(server.camera_port(), Some(8554));
+    }
+
     // ── Upstream message handling ─────────────────────────────────────────────
 
     #[tokio::test]
@@ -600,6 +736,30 @@ mod tests {
         assert!(
             COCKPIT_HTML.contains("KeyW") || COCKPIT_HTML.contains("wasd") || COCKPIT_HTML.contains("WASD"),
             "Cockpit HTML must contain W-A-S-D keyboard bindings"
+        );
+    }
+
+    #[test]
+    fn cockpit_html_contains_camera_tab() {
+        assert!(
+            COCKPIT_HTML.contains("camera"),
+            "Cockpit HTML must contain a camera tab"
+        );
+    }
+
+    #[test]
+    fn cockpit_html_contains_camera_img_element() {
+        assert!(
+            COCKPIT_HTML.contains("camera-img"),
+            "Cockpit HTML must contain a camera feed <img> element"
+        );
+    }
+
+    #[test]
+    fn cockpit_html_contains_camera_frame_endpoint() {
+        assert!(
+            COCKPIT_HTML.contains("/frame"),
+            "Cockpit HTML must reference the /frame camera endpoint"
         );
     }
 
