@@ -35,8 +35,19 @@
   .btn.active { background: #1f3a5f; border-color: var(--accent); color: var(--accent); }
   .btn.danger { border-color: var(--red); color: var(--red); }
   .btn.danger.active { background: #3a1a1a; }
+  /* Tab navigation */
+  .tab-bar { background: var(--surface); border-bottom: 1px solid var(--border);
+             display: flex; padding: 0 1rem; }
+  .tab-btn { background: transparent; border: none; border-bottom: 2px solid transparent;
+             color: var(--text-dim); padding: 0.5rem 1rem; cursor: pointer; font-size: 0.85rem;
+             font-family: var(--font); transition: color .15s, border-color .15s; }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-panel { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+  .tab-panel.active { display: flex; }
+  /* Dashboard grid */
   main { flex: 1; display: grid; padding: 0.75rem; gap: 0.75rem;
-         grid-template-columns: 1fr 1fr 1fr; grid-template-rows: auto 1fr; }
+         grid-template-columns: 1fr 1fr 1fr; grid-template-rows: auto 1fr auto; }
   .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
            display: flex; flex-direction: column; overflow: hidden; }
   .panel-title { font-size: 0.75rem; font-weight: 700; padding: 0.5rem 0.75rem;
@@ -94,8 +105,49 @@
   .gamepad-info { font-size: 0.7rem; color: var(--text-dim); text-align: center; }
   /* HITL Panel */
   #panel-hitl { grid-column: 3; grid-row: 2; }
-  .hitl-body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; flex: 1; }
+  .hitl-body { padding: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; flex: 1; overflow-y: auto; }
   .hitl-empty { color: var(--text-dim); font-size: 0.8rem; }
+  .hitl-queue-item { background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+                     padding: 0.5rem 0.6rem; font-size: 0.8rem; display: flex; flex-direction: column; gap: 0.25rem; }
+  .hitl-queue-item .hitl-q { color: var(--text); }
+  .hitl-queue-item .hitl-ts { font-size: 0.68rem; color: var(--text-dim); font-family: var(--mono); }
+  .hitl-input-row { display: flex; gap: 0.5rem; }
+  .count-badge { background: var(--accent); color: #000; border-radius: 999px; font-size: 0.65rem;
+                 font-weight: 700; padding: 0.1rem 0.4rem; min-width: 1.2em; text-align: center; }
+  /* OODA Loop Panel */
+  #panel-ooda { grid-column: 1 / 4; grid-row: 3; }
+  .ooda-body { padding: 0.6rem 0.75rem; display: flex; flex-direction: column; gap: 0.55rem; }
+  .ooda-phases { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .ooda-phase { flex: 1; min-width: 100px; border: 1px solid var(--border); border-radius: 8px;
+                padding: 0.5rem 0.75rem; display: flex; flex-direction: column; gap: 0.2rem; }
+  .ooda-phase .phase-label { font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+                              letter-spacing: 0.08em; }
+  .ooda-phase .phase-detail { font-size: 0.7rem; color: var(--text-dim); font-family: var(--mono);
+                               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ooda-phase.phase-observe .phase-label { color: var(--accent); }
+  .ooda-phase.phase-orient  .phase-label { color: var(--yellow); }
+  .ooda-phase.phase-decide  .phase-label { color: #a371f7; }
+  .ooda-phase.phase-act     .phase-label { color: var(--green); }
+  .ooda-phase.phase-observe.active { border-color: var(--accent); background: #0d1f3f; }
+  .ooda-phase.phase-orient.active  { border-color: var(--yellow); background: #2a1f0a; }
+  .ooda-phase.phase-decide.active  { border-color: #a371f7;       background: #1f1030; }
+  .ooda-phase.phase-act.active     { border-color: var(--green);  background: #0d2310; }
+  .ooda-footer { display: flex; align-items: center; gap: 1.5rem; font-size: 0.72rem;
+                 color: var(--text-dim); border-top: 1px solid var(--border); padding-top: 0.4rem; }
+  .ooda-tick { font-family: var(--mono); }
+  /* Hardware Interlock */
+  .interlock-row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+  .interlock-badge { display: flex; align-items: center; gap: 0.35rem; background: var(--bg);
+                     border: 1px solid var(--border); border-radius: 6px;
+                     padding: 0.25rem 0.5rem; font-size: 0.72rem; }
+  .interlock-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .interlock-dot.ok    { background: var(--green); }
+  .interlock-dot.warn  { background: var(--yellow); }
+  .interlock-dot.fault { background: var(--red); }
+  .interlock-dot.idle  { background: #555; }
+  .interlock-label { color: var(--text-dim); }
+  .interlock-value { color: var(--text); font-family: var(--mono); }
+  .heartbeat-line { font-size: 0.68rem; color: var(--text-dim); font-family: var(--mono); }
   /* HITL Modal overlay */
   #hitl-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.75);
                 z-index: 100; align-items: center; justify-content: center; }
@@ -118,63 +170,108 @@
                          padding: 0.5rem 1rem; text-align: center; font-size: 0.85rem;
                          color: var(--red); z-index: 50; }
   #disconnected-banner.visible { display: block; }
+  /* 3D View tab */
+  #tab-3dview { position: relative; }
+  #three-container { flex: 1; background: #050810; overflow: hidden; }
+  #three-container canvas { display: block; width: 100% !important; height: 100% !important; }
+  .three-legend { position: absolute; bottom: 1rem; right: 1rem;
+                  background: rgba(22,27,34,.88); border: 1px solid var(--border);
+                  border-radius: 8px; padding: 0.6rem 0.8rem; font-size: 0.72rem;
+                  display: flex; flex-direction: column; gap: 0.3rem; pointer-events: none; }
+  .legend-item { display: flex; align-items: center; gap: 0.5rem; }
+  .legend-swatch { width: 12px; height: 12px; border-radius: 2px; flex-shrink: 0; }
+  /* Config tab */
+  #tab-config { overflow: auto; }
+  .config-layout { display: flex; gap: 0.75rem; padding: 0.75rem; flex: 1; min-height: 0; }
+  .config-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+                  display: flex; flex-direction: column; overflow: hidden; flex: 1; }
+  .config-body { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.75rem;
+                 flex: 1; overflow: hidden; }
+  .config-textarea { flex: 1; background: var(--bg); border: 1px solid var(--border);
+                     border-radius: 6px; padding: 0.5rem; color: var(--text);
+                     font-family: var(--mono); font-size: 0.75rem; resize: none;
+                     outline: none; min-height: 200px; }
+  .config-textarea:focus { border-color: var(--accent); }
+  .config-actions { display: flex; gap: 0.5rem; }
+  .config-status { font-size: 0.75rem; color: var(--text-dim); font-family: var(--mono); min-height: 1.2em; }
+  .ollama-url-row { display: flex; gap: 0.5rem; }
+  .ollama-url-input { flex: 1; background: var(--bg); border: 1px solid var(--border);
+                      border-radius: 6px; padding: 0.35rem 0.6rem; color: var(--text);
+                      font-family: var(--mono); font-size: 0.8rem; outline: none; }
+  .ollama-url-input:focus { border-color: var(--accent); }
+  .model-list { display: flex; flex-direction: column; gap: 0.35rem; overflow-y: auto; flex: 1; }
+  .model-item { background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+                padding: 0.4rem 0.6rem; font-size: 0.78rem; font-family: var(--mono); }
+  .model-item .model-name { color: var(--text); }
+  .model-item .model-size { color: var(--text-dim); font-size: 0.7rem; }
   /* Responsive */
   @media (max-width: 1100px) {
-    main { grid-template-columns: 1fr 1fr; grid-template-rows: auto auto 1fr; }
+    main { grid-template-columns: 1fr 1fr; grid-template-rows: auto auto 1fr auto; }
     #panel-sensor { grid-column: 1; grid-row: 1; }
     #panel-teleop  { grid-column: 2; grid-row: 1; }
     #panel-brain   { grid-column: 1 / 3; grid-row: 2; }
     #panel-hitl    { grid-column: 1 / 3; grid-row: 3; }
+    #panel-ooda    { grid-column: 1 / 3; grid-row: 4; }
+    .config-layout { flex-direction: column; }
   }
   @media (max-width: 700px) {
     main { grid-template-columns: 1fr; }
-    #panel-sensor, #panel-teleop, #panel-brain, #panel-hitl { grid-column: 1; grid-row: auto; }
+    #panel-sensor, #panel-teleop, #panel-brain, #panel-hitl, #panel-ooda { grid-column: 1; grid-row: auto; }
+    .config-layout { flex-direction: column; }
   }
 </style>
 </head>
 <body>
 
-<div id="disconnected-banner">⚠ Disconnected from MechOS – attempting to reconnect…</div>
+<div id="disconnected-banner">&#9888; Disconnected from MechOS &#8211; attempting to reconnect&#8230;</div>
 
 <header>
-  <h1>🤖 MechOS Cockpit</h1>
+  <h1>&#129302; MechOS Cockpit</h1>
   <span id="state-badge" class="status-badge badge-observing">Observing</span>
   <span style="flex:1"></span>
-  <span id="battery" style="font-size:.8rem;font-family:var(--mono)">🔋 —%</span>
-  <button id="btn-pause" class="btn">⏸ Pause Agent</button>
+  <span id="battery" style="font-size:.8rem;font-family:var(--mono)">&#128267; &#8212;%</span>
+  <button id="btn-pause" class="btn">&#9208; Pause Agent</button>
   <div class="conn-indicator">
     <div id="conn-dot" class="conn-dot"></div>
     <span id="conn-label">Disconnected</span>
   </div>
 </header>
 
+<nav class="tab-bar">
+  <button class="tab-btn active" data-tab="dashboard">&#128202; Dashboard</button>
+  <button class="tab-btn" data-tab="3dview">&#128506; 3D View</button>
+  <button class="tab-btn" data-tab="config">&#9881; Config</button>
+</nav>
+
+<!-- Dashboard Tab -->
+<div id="tab-dashboard" class="tab-panel active">
 <main>
   <!-- Sensory Visualizer -->
   <div class="panel" id="panel-sensor">
     <div class="panel-title">
-      <span>📡 Sensory Visualizer</span>
+      <span>&#128225; Sensory Visualizer</span>
       <span id="lidar-count" style="font-size:.65rem;color:var(--text-dim)">0 pts</span>
     </div>
     <canvas id="sensor-canvas"></canvas>
-    <div class="sensor-info" id="sensor-info">X: — &nbsp; Y: — &nbsp; Heading: —°</div>
+    <div class="sensor-info" id="sensor-info">X: &#8212; &nbsp; Y: &#8212; &nbsp; Heading: &#8212;&#176;</div>
   </div>
 
   <!-- Brain Debugger -->
   <div class="panel" id="panel-brain">
-    <div class="panel-title">🧠 Brain Debugger</div>
+    <div class="panel-title">&#129504; Brain Debugger</div>
     <div class="brain-body">
       <div class="metrics-ribbon">
         <div class="metric">
           <span class="metric-label">State</span>
-          <span class="metric-value" id="met-state">—</span>
+          <span class="metric-value" id="met-state">&#8212;</span>
         </div>
         <div class="metric">
           <span class="metric-label">Inference</span>
-          <span class="metric-value" id="met-latency">—</span>
+          <span class="metric-value" id="met-latency">&#8212;</span>
         </div>
         <div class="metric">
           <span class="metric-label">Last Action</span>
-          <span class="metric-value" id="met-action" style="color:var(--green)">—</span>
+          <span class="metric-value" id="met-action" style="color:var(--green)">&#8212;</span>
         </div>
         <div class="metric">
           <span class="metric-label">Events/s</span>
@@ -196,10 +293,10 @@
 
   <!-- Teleoperation -->
   <div class="panel" id="panel-teleop">
-    <div class="panel-title">🕹 Teleoperation</div>
+    <div class="panel-title">&#128369; Teleoperation</div>
     <div class="teleop-body">
       <div style="font-size:.72rem;color:var(--text-dim);text-align:center">
-        W-A-S-D / Arrow keys &nbsp;·&nbsp; Virtual joystick &nbsp;·&nbsp; Gamepad
+        W-A-S-D / Arrow keys &nbsp;&#183;&nbsp; Virtual joystick &nbsp;&#183;&nbsp; Gamepad
       </div>
       <!-- WASD visual -->
       <div class="wasd-grid">
@@ -221,25 +318,144 @@
 
   <!-- HITL Panel -->
   <div class="panel" id="panel-hitl">
-    <div class="panel-title">🙋 HITL Alerts</div>
+    <div class="panel-title">
+      <span>&#128587; HITL Alerts</span>
+      <span id="hitl-count-badge" class="count-badge" style="display:none">0</span>
+    </div>
     <div class="hitl-body">
       <div class="hitl-empty" id="hitl-empty">No pending questions from the robot.</div>
-      <div id="hitl-question" style="display:none;font-size:.85rem;padding:.5rem;background:var(--bg);border:1px solid var(--border);border-radius:6px"></div>
-      <div id="hitl-input-row" style="display:none;gap:.5rem">
-        <input id="hitl-input" type="text" placeholder="Type your answer…" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:.4rem .6rem;color:var(--text);font-family:var(--font);font-size:.85rem;outline:none"/>
+      <div id="hitl-queue"></div>
+      <div id="hitl-input-row" class="hitl-input-row" style="display:none">
+        <input id="hitl-input" type="text" placeholder="Type your answer&#8230;"
+               style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:.4rem .6rem;color:var(--text);font-family:var(--font);font-size:.85rem;outline:none"/>
         <button class="btn" id="hitl-submit">Send</button>
       </div>
     </div>
   </div>
+
+  <!-- OODA Loop Status Panel -->
+  <div class="panel" id="panel-ooda">
+    <div class="panel-title">
+      <span>&#128260; OODA Loop Status</span>
+      <span id="ooda-tick" class="ooda-tick" style="font-size:.7rem;color:var(--text-dim)">Tick: 0</span>
+    </div>
+    <div class="ooda-body">
+      <div class="ooda-phases">
+        <div class="ooda-phase phase-observe" id="ooda-observe">
+          <span class="phase-label">&#128065; Observe</span>
+          <span class="phase-detail" id="ooda-observe-detail">&#8212;</span>
+        </div>
+        <div class="ooda-phase phase-orient" id="ooda-orient">
+          <span class="phase-label">&#129517; Orient</span>
+          <span class="phase-detail" id="ooda-orient-detail">&#8212;</span>
+        </div>
+        <div class="ooda-phase phase-decide" id="ooda-decide">
+          <span class="phase-label">&#128161; Decide</span>
+          <span class="phase-detail" id="ooda-decide-detail">&#8212;</span>
+        </div>
+        <div class="ooda-phase phase-act" id="ooda-act">
+          <span class="phase-label">&#9889; Act</span>
+          <span class="phase-detail" id="ooda-act-detail">&#8212;</span>
+        </div>
+      </div>
+      <!-- Hardware Interlock Monitor -->
+      <div class="interlock-row">
+        <div class="interlock-badge">
+          <span class="interlock-dot idle" id="ilk-kernel-dot"></span>
+          <span class="interlock-label">Kernel</span>
+          <span class="interlock-value" id="ilk-kernel-val">&#8212;</span>
+        </div>
+        <div class="interlock-badge">
+          <span class="interlock-dot idle" id="ilk-watchdog-dot"></span>
+          <span class="interlock-label">Watchdog</span>
+          <span class="interlock-value" id="ilk-watchdog-val">&#8212;</span>
+        </div>
+        <div class="interlock-badge">
+          <span class="interlock-dot idle" id="ilk-drive-dot"></span>
+          <span class="interlock-label">Drive</span>
+          <span class="interlock-value" id="ilk-drive-val">&#8212;</span>
+        </div>
+        <div class="interlock-badge">
+          <span class="interlock-dot idle" id="ilk-eventbus-dot"></span>
+          <span class="interlock-label">Event Bus</span>
+          <span class="interlock-value" id="ilk-eventbus-val">&#8212;</span>
+        </div>
+        <div class="interlock-badge">
+          <span class="interlock-dot idle" id="ilk-memory-dot"></span>
+          <span class="interlock-label">Memory</span>
+          <span class="interlock-value" id="ilk-memory-val">&#8212;</span>
+        </div>
+      </div>
+      <div class="ooda-footer">
+        <span class="heartbeat-line" id="heartbeat-line">Last event: &#8212;</span>
+      </div>
+    </div>
+  </div>
 </main>
+</div>
+
+<!-- 3D View Tab -->
+<div id="tab-3dview" class="tab-panel">
+  <div id="three-container"></div>
+  <div class="three-legend">
+    <div class="legend-item">
+      <span class="legend-swatch" style="background:#58a6ff"></span>
+      <span>Robot</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-swatch" style="border:1px solid #3fb950;background:transparent"></span>
+      <span>Octree Voxels</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-swatch" style="background:#d29922"></span>
+      <span>Planned Path</span>
+    </div>
+    <div class="legend-item">
+      <span class="legend-swatch" style="background:#30363d"></span>
+      <span>Grid</span>
+    </div>
+    <div style="font-size:.65rem;color:var(--text-dim);margin-top:.2rem">Drag: rotate &#183; Scroll: zoom</div>
+  </div>
+</div>
+
+<!-- Config Tab -->
+<div id="tab-config" class="tab-panel">
+  <div class="config-layout">
+    <div class="config-panel">
+      <div class="panel-title">&#9881; ~/.mechos/config.toml</div>
+      <div class="config-body">
+        <textarea id="config-textarea" class="config-textarea" spellcheck="false"
+                  placeholder="Loading config&#8230;"></textarea>
+        <div class="config-actions">
+          <button class="btn" id="btn-config-reload">&#128260; Reload</button>
+          <button class="btn active" id="btn-config-save">&#128190; Save</button>
+        </div>
+        <div class="config-status" id="config-status"></div>
+      </div>
+    </div>
+    <div class="config-panel">
+      <div class="panel-title">&#129302; Ollama Model Availability</div>
+      <div class="config-body">
+        <div class="ollama-url-row">
+          <input id="ollama-url" class="ollama-url-input" type="text"
+                 value="http://localhost:11434" placeholder="Ollama base URL"/>
+          <button class="btn active" id="btn-ollama-test">Test</button>
+        </div>
+        <div class="config-status" id="ollama-status"></div>
+        <div class="model-list" id="model-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- HITL Modal -->
 <div id="hitl-modal">
   <div class="modal-box">
-    <h2>🙋 Robot needs your help</h2>
+    <h2>&#128587; Robot needs your help</h2>
     <div class="modal-question" id="modal-question"></div>
     <div class="modal-context" id="modal-context" style="display:none"></div>
-    <input id="modal-input" class="modal-input" type="text" placeholder="Type your answer and press Enter…" autocomplete="off"/>
+    <input id="modal-input" class="modal-input" type="text"
+           placeholder="Type your answer and press Enter&#8230;" autocomplete="off"/>
     <div class="modal-actions">
       <button class="btn danger" id="modal-dismiss">Dismiss</button>
       <button class="btn active" id="modal-submit">Send Answer</button>
@@ -247,16 +463,17 @@
   </div>
 </div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
 'use strict';
-// ═══════════════════════════════════════════════════════════════════════════
+// =========================================================================
 // Constants & state
-// ═══════════════════════════════════════════════════════════════════════════
+// =========================================================================
 const WS_URL = `ws://${location.host}/ws`;
-const LINEAR_SPEED  = 0.5;  // m/s for WASD keys
-const ANGULAR_SPEED = 0.8;  // rad/s for WASD keys
-const DRIVE_HZ = 20;        // Hz – how often we send drive commands
-const SCALE = 80;           // pixels per metre on the sensor canvas
+const LINEAR_SPEED  = 0.5;
+const ANGULAR_SPEED = 0.8;
+const DRIVE_HZ = 20;
+const SCALE = 80;
 
 let ws = null;
 let reconnectTimer = null;
@@ -265,41 +482,69 @@ let robotX = 0, robotY = 0, robotHeading = 0, battery = 0;
 let lidarRanges = [], lidarAngleMin = -Math.PI/2, lidarAngleIncrement = 0.017453;
 let keysDown = new Set();
 let joystickDragging = false;
-let joystickX = 0, joystickY = 0; // normalised [-1, 1]
+let joystickX = 0, joystickY = 0;
 let gamepadIndex = -1;
 let currentState = 'Observing';
-let eventCount = 0, epsTimer = 0, epsDisplay = 0;
+let eventCount = 0, epsDisplay = 0;
 let lastThinkTime = null;
 let teleopInterval = null;
 let pendingHITL = null;
 
-// ═══════════════════════════════════════════════════════════════════════════
+// OODA state
+let oodaTick = 0;
+let currentOodaPhase = null;
+
+// HITL queue
+let hitlQueue = [];
+
+// =========================================================================
+// Tab navigation
+// =========================================================================
+let threeInitialized = false;
+
+document.querySelectorAll('.tab-btn').forEach(function(btn) {
+  btn.addEventListener('click', function() {
+    var tab = btn.dataset.tab;
+    document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
+    document.querySelectorAll('.tab-panel').forEach(function(p) { p.classList.remove('active'); });
+    btn.classList.add('active');
+    document.getElementById('tab-' + tab).classList.add('active');
+    if (tab === '3dview' && !threeInitialized) { initThreeJS(); }
+    if (tab === 'config') { loadConfig(); }
+  });
+});
+
+// =========================================================================
 // WebSocket connection
-// ═══════════════════════════════════════════════════════════════════════════
+// =========================================================================
 function connect() {
   ws = new WebSocket(WS_URL);
 
-  ws.addEventListener('open', () => {
+  ws.addEventListener('open', function() {
     document.getElementById('conn-dot').classList.add('connected');
     document.getElementById('conn-label').textContent = 'Connected';
     document.getElementById('disconnected-banner').classList.remove('visible');
+    setInterlockStatus('kernel', 'ok', 'online');
+    setInterlockStatus('eventbus', 'ok', 'live');
   });
 
-  ws.addEventListener('close', () => {
+  ws.addEventListener('close', function() {
     document.getElementById('conn-dot').classList.remove('connected');
     document.getElementById('conn-label').textContent = 'Disconnected';
     document.getElementById('disconnected-banner').classList.add('visible');
+    setInterlockStatus('kernel', 'warn', 'offline');
+    setInterlockStatus('eventbus', 'fault', 'lost');
     scheduleReconnect();
   });
 
-  ws.addEventListener('error', () => {
-    ws.close();
-  });
+  ws.addEventListener('error', function() { ws.close(); });
 
-  ws.addEventListener('message', (e) => {
+  ws.addEventListener('message', function(e) {
     eventCount++;
+    document.getElementById('heartbeat-line').textContent =
+      'Last event: ' + new Date().toTimeString().slice(0, 8);
     try {
-      const event = JSON.parse(e.data);
+      var event = JSON.parse(e.data);
       handleEvent(event);
     } catch(_) {}
   });
@@ -307,35 +552,36 @@ function connect() {
 
 function scheduleReconnect() {
   if (reconnectTimer) return;
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connect();
-  }, 2000);
+  reconnectTimer = setTimeout(function() { reconnectTimer = null; connect(); }, 2000);
 }
 
 function send(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(obj));
-  }
+  if (ws && ws.readyState === WebSocket.OPEN) { ws.send(JSON.stringify(obj)); }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Event handling (downstream: server → browser)
-// ═══════════════════════════════════════════════════════════════════════════
+// =========================================================================
+// Event handling (downstream: server to browser)
+// =========================================================================
 function handleEvent(event) {
-  const payload = event.payload;
+  var payload = event.payload;
   if (!payload) return;
 
   if (payload.Telemetry) {
-    const t = payload.Telemetry;
+    var t = payload.Telemetry;
     robotX = t.position_x;
     robotY = t.position_y;
     robotHeading = t.heading_rad;
     battery = t.battery_percent;
-    document.getElementById('battery').textContent = `🔋 ${battery}%`;
+    document.getElementById('battery').textContent = '\uD83D\uDD0B ' + battery + '%';
     document.getElementById('sensor-info').textContent =
-      `X: ${robotX.toFixed(2)} m  Y: ${robotY.toFixed(2)} m  Heading: ${(robotHeading * 180/Math.PI).toFixed(1)}°`;
+      'X: ' + robotX.toFixed(2) + ' m  Y: ' + robotY.toFixed(2) + ' m  Heading: ' +
+      (robotHeading * 180 / Math.PI).toFixed(1) + '\u00B0';
     setState('Observing');
+    setOodaPhase('observe',
+      'pos=(' + robotX.toFixed(1) + ',' + robotY.toFixed(1) + ') hdg=' +
+      (robotHeading * 180 / Math.PI).toFixed(0) + '\u00B0');
+    setInterlockStatus('drive', 'ok', battery + '% bat');
+    setInterlockStatus('watchdog', 'ok', 'alive');
     return;
   }
 
@@ -343,70 +589,75 @@ function handleEvent(event) {
     lidarRanges = payload.LidarScan.ranges;
     lidarAngleMin = payload.LidarScan.angle_min_rad;
     lidarAngleIncrement = payload.LidarScan.angle_increment_rad;
-    document.getElementById('lidar-count').textContent = `${lidarRanges.length} pts`;
+    document.getElementById('lidar-count').textContent = lidarRanges.length + ' pts';
     return;
   }
 
   if (payload.AgentThought !== undefined) {
-    const thought = payload.AgentThought;
-    const src = event.source || '';
-
-    // Detect AskHuman intent published as AgentThought from dashboard adapter
+    var thought = payload.AgentThought;
+    var src = event.source || '';
     try {
-      const parsed = JSON.parse(thought);
+      var parsed = JSON.parse(thought);
       if (parsed.topic === '/hitl/ask_human' && parsed.msg && parsed.msg.question) {
         showHITLModal(parsed.msg.question, parsed.msg.context_image_id || null);
         setState('Suspended');
+        setOodaPhase('decide', 'AskHuman: ' + parsed.msg.question.slice(0, 50));
         return;
       }
-      // Drive override from kernel
       if (parsed.topic === '/cmd_vel' && src.includes('manual_override')) {
         setState('Suspended');
-        appendFeed('feed-context', `[OVERRIDE] Drive lin=${parsed.msg?.linear?.x} ang=${parsed.msg?.angular?.z}`);
+        appendFeed('feed-context',
+          '[OVERRIDE] Drive lin=' + (parsed.msg && parsed.msg.linear ? parsed.msg.linear.x : '?') +
+          ' ang=' + (parsed.msg && parsed.msg.angular ? parsed.msg.angular.z : '?'));
         return;
       }
-      // Action command
       if (parsed.topic === '/cmd_vel') {
         setState('Acting');
-        const action = `Drive(lin=${parsed.msg?.linear?.x}, ang=${parsed.msg?.angular?.z})`;
+        var action = 'Drive(lin=' + (parsed.msg && parsed.msg.linear ? parsed.msg.linear.x : '?') +
+                     ', ang=' + (parsed.msg && parsed.msg.angular ? parsed.msg.angular.z : '?') + ')';
         document.getElementById('met-action').textContent = action;
         appendFeed('feed-output', thought, true);
+        setOodaPhase('act', action);
         return;
       }
     } catch(_) {}
-
-    // Detect structured LLM output (HardwareIntent JSON)
     try {
-      const parsed = JSON.parse(thought);
-      if (parsed.action) {
+      var parsed2 = JSON.parse(thought);
+      if (parsed2.action) {
         setState('Acting');
-        document.getElementById('met-action').textContent = parsed.action;
+        document.getElementById('met-action').textContent = parsed2.action;
         appendFeed('feed-output', thought, true);
+        setOodaPhase('act', 'action=' + parsed2.action);
         if (lastThinkTime) {
-          const ms = Date.now() - lastThinkTime;
-          document.getElementById('met-latency').textContent = `${ms}ms`;
+          document.getElementById('met-latency').textContent = (Date.now() - lastThinkTime) + 'ms';
         }
         return;
       }
     } catch(_) {}
-
-    // Plain thought / system prompt → context feed
     setState('Thinking');
     lastThinkTime = Date.now();
     appendFeed('feed-context', thought, false);
+    setOodaPhase('orient', thought.slice(0, 80));
     return;
   }
 
   if (payload.HumanResponse !== undefined) {
-    appendFeed('feed-context', `[Human] ${payload.HumanResponse}`);
+    appendFeed('feed-context', '[Human] ' + payload.HumanResponse);
     setState('Thinking');
     return;
   }
 
   if (payload.HardwareFault !== undefined) {
-    const f = payload.HardwareFault;
-    appendFeed('feed-context', `⚠ Fault on ${f.component} [${f.code}]: ${f.message}`);
+    var f = payload.HardwareFault;
+    appendFeed('feed-context',
+      '\u26A0 Fault on ' + f.component + ' [' + f.code + ']: ' + f.message);
     setState('Suspended');
+    var comp = (f.component || '').toLowerCase();
+    if (comp.indexOf('kernel') >= 0)                            setInterlockStatus('kernel',   'fault', f.code || 'fault');
+    else if (comp.indexOf('watchdog') >= 0)                     setInterlockStatus('watchdog', 'fault', f.code || 'fault');
+    else if (comp.indexOf('drive') >= 0 || comp.indexOf('motor') >= 0) setInterlockStatus('drive', 'fault', f.code || 'fault');
+    else if (comp.indexOf('bus') >= 0   || comp.indexOf('event') >= 0) setInterlockStatus('eventbus', 'fault', f.code || 'fault');
+    else if (comp.indexOf('memory') >= 0|| comp.indexOf('mem') >= 0)   setInterlockStatus('memory',   'fault', f.code || 'fault');
     return;
   }
 
@@ -418,10 +669,10 @@ function handleEvent(event) {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// =========================================================================
 // State & UI helpers
-// ═══════════════════════════════════════════════════════════════════════════
-const STATE_CLASSES = {
+// =========================================================================
+var STATE_CLASSES = {
   Observing: 'badge-observing', Thinking: 'badge-thinking',
   Acting: 'badge-acting', Suspended: 'badge-suspended', Paused: 'badge-paused'
 };
@@ -429,189 +680,194 @@ const STATE_CLASSES = {
 function setState(state) {
   if (agentPaused && state !== 'Paused') return;
   currentState = state;
-  const badge = document.getElementById('state-badge');
+  var badge = document.getElementById('state-badge');
   badge.textContent = state;
   badge.className = 'status-badge ' + (STATE_CLASSES[state] || 'badge-observing');
   document.getElementById('met-state').textContent = state;
 }
 
 function appendFeed(feedId, text, isJson) {
-  const feed = document.getElementById(feedId);
-  const entry = document.createElement('div');
+  var feed = document.getElementById(feedId);
+  var entry = document.createElement('div');
   entry.className = 'feed-entry';
-  const ts = new Date().toTimeString().slice(0, 8);
-  let display = text.length > 300 ? text.slice(0, 300) + '…' : text;
-  entry.innerHTML = `<span class="ts">[${ts}]</span> <span class="txt${isJson ? ' json' : ''}">${escHtml(display)}</span>`;
+  var ts = new Date().toTimeString().slice(0, 8);
+  var display = text.length > 300 ? text.slice(0, 300) + '\u2026' : text;
+  entry.innerHTML = '<span class="ts">[' + ts + ']</span> <span class="txt' +
+    (isJson ? ' json' : '') + '">' + escHtml(display) + '</span>';
   feed.appendChild(entry);
-  // Keep only last 200 entries
   while (feed.children.length > 200) feed.removeChild(feed.firstChild);
   feed.scrollTop = feed.scrollHeight;
 }
 
 function escHtml(s) {
-  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// =========================================================================
+// OODA Loop
+// =========================================================================
+function setOodaPhase(phase, detail) {
+  oodaTick++;
+  document.getElementById('ooda-tick').textContent = 'Tick: ' + oodaTick;
+  if (detail) {
+    document.getElementById('ooda-' + phase + '-detail').textContent = detail;
+  }
+  ['observe', 'orient', 'decide', 'act'].forEach(function(p) {
+    document.getElementById('ooda-' + p).classList.remove('active');
+  });
+  document.getElementById('ooda-' + phase).classList.add('active');
+  currentOodaPhase = phase;
+}
+
+// =========================================================================
+// Hardware Interlock Monitor
+// =========================================================================
+function setInterlockStatus(component, status, value) {
+  var dot = document.getElementById('ilk-' + component + '-dot');
+  var val = document.getElementById('ilk-' + component + '-val');
+  if (!dot || !val) return;
+  dot.className = 'interlock-dot ' + status;
+  val.textContent = value;
+}
+
+// =========================================================================
 // Mode toggle (pause / resume)
-// ═══════════════════════════════════════════════════════════════════════════
+// =========================================================================
 function updatePauseButton() {
-  const btn = document.getElementById('btn-pause');
+  var btn = document.getElementById('btn-pause');
   if (agentPaused) {
-    btn.textContent = '▶ Resume Agent';
+    btn.textContent = '\u25B6 Resume Agent';
     btn.classList.add('active');
     setState('Paused');
   } else {
-    btn.textContent = '⏸ Pause Agent';
+    btn.textContent = '\u23F8 Pause Agent';
     btn.classList.remove('active');
     setState('Observing');
   }
 }
 
-document.getElementById('btn-pause').addEventListener('click', () => {
+document.getElementById('btn-pause').addEventListener('click', function() {
   agentPaused = !agentPaused;
   updatePauseButton();
   send({ topic: '/agent/mode', msg: { paused: agentPaused } });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Teleoperation – WASD keyboard
-// ═══════════════════════════════════════════════════════════════════════════
-const KEY_MAP = {
+// =========================================================================
+// Teleoperation - WASD keyboard
+// =========================================================================
+var KEY_MAP = {
   'KeyW': [LINEAR_SPEED, 0], 'ArrowUp':    [LINEAR_SPEED, 0],
   'KeyS': [-LINEAR_SPEED, 0],'ArrowDown':  [-LINEAR_SPEED, 0],
   'KeyA': [0,  ANGULAR_SPEED],'ArrowLeft': [0,  ANGULAR_SPEED],
   'KeyD': [0, -ANGULAR_SPEED],'ArrowRight': [0, -ANGULAR_SPEED],
 };
 
-document.addEventListener('keydown', (e) => {
-  if (e.target.tagName === 'INPUT') return;
-  if (KEY_MAP[e.code]) {
-    e.preventDefault();
-    keysDown.add(e.code);
-    updateKeyVisuals();
-  }
+document.addEventListener('keydown', function(e) {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  if (KEY_MAP[e.code]) { e.preventDefault(); keysDown.add(e.code); updateKeyVisuals(); }
 });
 
-document.addEventListener('keyup', (e) => {
-  keysDown.delete(e.code);
-  updateKeyVisuals();
-});
+document.addEventListener('keyup', function(e) { keysDown.delete(e.code); updateKeyVisuals(); });
 
 function updateKeyVisuals() {
-  ['key-w','key-a','key-s','key-d'].forEach(id => {
-    const el = document.getElementById(id);
-    const code = el.dataset.key;
-    el.classList.toggle('pressed', keysDown.has(code));
+  ['key-w','key-a','key-s','key-d'].forEach(function(id) {
+    var el = document.getElementById(id);
+    el.classList.toggle('pressed', keysDown.has(el.dataset.key));
   });
 }
 
 function computeKeyVelocity() {
-  let linear = 0, angular = 0;
-  for (const code of keysDown) {
-    if (KEY_MAP[code]) {
-      linear  += KEY_MAP[code][0];
-      angular += KEY_MAP[code][1];
-    }
-  }
-  return [
-    Math.max(-1, Math.min(1, linear)),
-    Math.max(-1, Math.min(1, angular))
-  ];
+  var linear = 0, angular = 0;
+  keysDown.forEach(function(code) {
+    if (KEY_MAP[code]) { linear += KEY_MAP[code][0]; angular += KEY_MAP[code][1]; }
+  });
+  return [Math.max(-1, Math.min(1, linear)), Math.max(-1, Math.min(1, angular))];
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Teleoperation – virtual joystick
-// ═══════════════════════════════════════════════════════════════════════════
-const jsCanvas = document.getElementById('joystick-canvas');
-const jsCtx = jsCanvas.getContext('2d');
-const jsR = jsCanvas.width / 2;  // outer radius
-const jsKnob = jsR * 0.35;       // knob radius
+// =========================================================================
+// Teleoperation - virtual joystick
+// =========================================================================
+var jsCanvas = document.getElementById('joystick-canvas');
+var jsCtx = jsCanvas.getContext('2d');
+var jsR = jsCanvas.width / 2;
+var jsKnob = jsR * 0.35;
 
 function drawJoystick() {
   jsCtx.clearRect(0, 0, jsCanvas.width, jsCanvas.height);
-  // Outer ring
   jsCtx.beginPath();
   jsCtx.arc(jsR, jsR, jsR - 4, 0, Math.PI * 2);
-  jsCtx.strokeStyle = '#30363d';
-  jsCtx.lineWidth = 2;
-  jsCtx.stroke();
-  // Cross-hair
-  jsCtx.strokeStyle = '#21262d';
-  jsCtx.lineWidth = 1;
+  jsCtx.strokeStyle = '#30363d'; jsCtx.lineWidth = 2; jsCtx.stroke();
+  jsCtx.strokeStyle = '#21262d'; jsCtx.lineWidth = 1;
   jsCtx.beginPath(); jsCtx.moveTo(jsR, 4); jsCtx.lineTo(jsR, jsCanvas.height - 4); jsCtx.stroke();
   jsCtx.beginPath(); jsCtx.moveTo(4, jsR); jsCtx.lineTo(jsCanvas.width - 4, jsR); jsCtx.stroke();
-  // Knob
-  const kx = jsR + joystickX * (jsR - jsKnob - 4);
-  const ky = jsR - joystickY * (jsR - jsKnob - 4);
-  jsCtx.beginPath();
-  jsCtx.arc(kx, ky, jsKnob, 0, Math.PI * 2);
-  jsCtx.fillStyle = joystickDragging ? '#58a6ff' : '#388bfd55';
-  jsCtx.fill();
-  jsCtx.strokeStyle = '#58a6ff';
-  jsCtx.lineWidth = 2;
-  jsCtx.stroke();
+  var kx = jsR + joystickX * (jsR - jsKnob - 4);
+  var ky = jsR - joystickY * (jsR - jsKnob - 4);
+  jsCtx.beginPath(); jsCtx.arc(kx, ky, jsKnob, 0, Math.PI * 2);
+  jsCtx.fillStyle = joystickDragging ? '#58a6ff' : '#388bfd55'; jsCtx.fill();
+  jsCtx.strokeStyle = '#58a6ff'; jsCtx.lineWidth = 2; jsCtx.stroke();
 }
 
 function joystickEventPos(e) {
-  const rect = jsCanvas.getBoundingClientRect();
-  const src = e.touches ? e.touches[0] : e;
+  var rect = jsCanvas.getBoundingClientRect();
+  var src = e.touches ? e.touches[0] : e;
   return [(src.clientX - rect.left - jsR) / jsR, -(src.clientY - rect.top - jsR) / jsR];
 }
 
 function clampJoystick(x, y) {
-  const len = Math.sqrt(x*x + y*y);
+  var len = Math.sqrt(x*x + y*y);
   if (len > 1) { x /= len; y /= len; }
   return [x, y];
 }
 
-jsCanvas.addEventListener('mousedown', e => { joystickDragging = true; });
-jsCanvas.addEventListener('touchstart', e => { e.preventDefault(); joystickDragging = true; }, { passive: false });
-document.addEventListener('mousemove', e => {
+jsCanvas.addEventListener('mousedown', function() { joystickDragging = true; });
+jsCanvas.addEventListener('touchstart', function(e) { e.preventDefault(); joystickDragging = true; }, { passive: false });
+document.addEventListener('mousemove', function(e) {
   if (!joystickDragging) return;
-  [joystickX, joystickY] = clampJoystick(...joystickEventPos(e));
+  var jpos = joystickEventPos(e);
+  var cpos = clampJoystick(jpos[0], jpos[1]);
+  joystickX = cpos[0]; joystickY = cpos[1];
 });
-document.addEventListener('touchmove', e => {
+document.addEventListener('touchmove', function(e) {
   if (!joystickDragging) return;
   e.preventDefault();
-  [joystickX, joystickY] = clampJoystick(...joystickEventPos(e));
+  var jpos = joystickEventPos(e);
+  var cpos = clampJoystick(jpos[0], jpos[1]);
+  joystickX = cpos[0]; joystickY = cpos[1];
 }, { passive: false });
-document.addEventListener('mouseup', () => { joystickDragging = false; joystickX = 0; joystickY = 0; });
-document.addEventListener('touchend', () => { joystickDragging = false; joystickX = 0; joystickY = 0; });
+document.addEventListener('mouseup', function() { joystickDragging = false; joystickX = 0; joystickY = 0; });
+document.addEventListener('touchend', function() { joystickDragging = false; joystickX = 0; joystickY = 0; });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Teleoperation – Gamepad API
-// ═══════════════════════════════════════════════════════════════════════════
-window.addEventListener('gamepadconnected', e => {
+// =========================================================================
+// Teleoperation - Gamepad API
+// =========================================================================
+window.addEventListener('gamepadconnected', function(e) {
   gamepadIndex = e.gamepad.index;
-  document.getElementById('gamepad-info').textContent = `🎮 ${e.gamepad.id.slice(0, 30)}`;
+  document.getElementById('gamepad-info').textContent = '\uD83C\uDFAE ' + e.gamepad.id.slice(0, 30);
 });
-window.addEventListener('gamepaddisconnected', () => {
+window.addEventListener('gamepaddisconnected', function() {
   gamepadIndex = -1;
   document.getElementById('gamepad-info').textContent = 'No gamepad detected';
 });
 
 function readGamepad() {
   if (gamepadIndex < 0) return [0, 0];
-  const gp = navigator.getGamepads()[gamepadIndex];
+  var gp = navigator.getGamepads()[gamepadIndex];
   if (!gp) return [0, 0];
-  const dead = 0.1;
-  const linear  = Math.abs(gp.axes[1]) > dead ? -gp.axes[1] : 0;
-  const angular = Math.abs(gp.axes[0]) > dead ? -gp.axes[0] : 0;
+  var dead = 0.1;
+  var linear  = Math.abs(gp.axes[1]) > dead ? -gp.axes[1] : 0;
+  var angular = Math.abs(gp.axes[0]) > dead ? -gp.axes[0] : 0;
   return [linear * LINEAR_SPEED, angular * ANGULAR_SPEED];
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// =========================================================================
 // Drive command sender
-// ═══════════════════════════════════════════════════════════════════════════
+// =========================================================================
 function sendDrive(linear, angular) {
   if (Math.abs(linear) < 0.001 && Math.abs(angular) < 0.001) return;
   document.getElementById('vel-display').textContent =
-    `Linear: ${linear.toFixed(2)} m/s   Angular: ${angular.toFixed(2)} rad/s`;
+    'Linear: ' + linear.toFixed(2) + ' m/s   Angular: ' + angular.toFixed(2) + ' rad/s';
   send({
-    op: 'publish',
-    topic: '/cmd_vel',
-    source: 'dashboard_override',
+    op: 'publish', topic: '/cmd_vel', source: 'dashboard_override',
     msg: {
       linear:  { x: parseFloat(linear.toFixed(3)),  y: 0, z: 0 },
       angular: { x: 0, y: 0, z: parseFloat(angular.toFixed(3)) }
@@ -619,191 +875,327 @@ function sendDrive(linear, angular) {
   });
 }
 
-teleopInterval = setInterval(() => {
-  let [kLin, kAng] = computeKeyVelocity();
-  let [gpLin, gpAng] = readGamepad();
-  // Joystick: Y axis = forward/back, X axis = turn
-  const jsLin = joystickY * LINEAR_SPEED;
-  const jsAng = -joystickX * ANGULAR_SPEED;
-  // Priority: gamepad > keyboard > joystick
-  const linear  = gpLin  || kLin  || jsLin;
-  const angular = gpAng  || kAng  || jsAng;
+teleopInterval = setInterval(function() {
+  var kv  = computeKeyVelocity();
+  var gpv = readGamepad();
+  var jsLin = joystickY * LINEAR_SPEED;
+  var jsAng = -joystickX * ANGULAR_SPEED;
+  var linear  = gpv[0] || kv[0] || jsLin;
+  var angular = gpv[1] || kv[1] || jsAng;
   if (Math.abs(linear) > 0.01 || Math.abs(angular) > 0.01) {
     sendDrive(linear, angular);
-    setState('Suspended'); // teleop overrides AI
+    setState('Suspended');
   }
 }, 1000 / DRIVE_HZ);
 
-// WASD visual key click (mobile)
-document.querySelectorAll('.wasd-key:not(.empty)').forEach(el => {
-  el.addEventListener('pointerdown', e => {
-    e.preventDefault();
-    keysDown.add(el.dataset.key);
-    updateKeyVisuals();
+document.querySelectorAll('.wasd-key:not(.empty)').forEach(function(el) {
+  el.addEventListener('pointerdown', function(e) {
+    e.preventDefault(); keysDown.add(el.dataset.key); updateKeyVisuals();
   });
-  el.addEventListener('pointerup', e => {
-    e.preventDefault();
-    keysDown.delete(el.dataset.key);
-    updateKeyVisuals();
+  el.addEventListener('pointerup', function(e) {
+    e.preventDefault(); keysDown.delete(el.dataset.key); updateKeyVisuals();
   });
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// HITL – inline panel
-// ═══════════════════════════════════════════════════════════════════════════
-function showHITLModal(question, contextImageId) {
-  pendingHITL = question;
-  // Show modal
-  document.getElementById('modal-question').textContent = question;
-  const ctx = document.getElementById('modal-context');
-  if (contextImageId) {
-    ctx.textContent = `Context: frame ${contextImageId}`;
-    ctx.style.display = '';
-  } else {
-    ctx.style.display = 'none';
+// =========================================================================
+// HITL - queue management
+// =========================================================================
+function renderHITLQueue() {
+  var queueEl  = document.getElementById('hitl-queue');
+  var emptyEl  = document.getElementById('hitl-empty');
+  var badge    = document.getElementById('hitl-count-badge');
+  var inputRow = document.getElementById('hitl-input-row');
+  queueEl.innerHTML = '';
+  if (hitlQueue.length === 0) {
+    emptyEl.style.display = ''; badge.style.display = 'none'; inputRow.style.display = 'none';
+    return;
   }
+  emptyEl.style.display = 'none';
+  badge.textContent = hitlQueue.length; badge.style.display = '';
+  inputRow.style.display = 'flex';
+  hitlQueue.forEach(function(item, idx) {
+    var div = document.createElement('div');
+    div.className = 'hitl-queue-item';
+    div.innerHTML = '<span class="hitl-q">' + escHtml(item.question) + '</span>' +
+                    '<span class="hitl-ts">#' + (idx + 1) + ' \u00B7 ' + item.ts + '</span>';
+    queueEl.appendChild(div);
+  });
+}
+
+function showHITLModal(question, contextImageId) {
+  var ts = new Date().toTimeString().slice(0, 8);
+  hitlQueue.push({ question: question, contextImageId: contextImageId || null, ts: ts });
+  pendingHITL = question;
+  renderHITLQueue();
+  document.getElementById('modal-question').textContent = question;
+  var ctx = document.getElementById('modal-context');
+  if (contextImageId) { ctx.textContent = 'Context: frame ' + contextImageId; ctx.style.display = ''; }
+  else { ctx.style.display = 'none'; }
   document.getElementById('modal-input').value = '';
   document.getElementById('hitl-modal').classList.add('visible');
   document.getElementById('modal-input').focus();
-  // Also update inline panel
-  document.getElementById('hitl-empty').style.display = 'none';
-  document.getElementById('hitl-question').style.display = '';
-  document.getElementById('hitl-input-row').style.display = 'flex';
-  document.getElementById('hitl-question').textContent = question;
 }
 
-function dismissHITL() {
-  document.getElementById('hitl-modal').classList.remove('visible');
-}
+function dismissHITL() { document.getElementById('hitl-modal').classList.remove('visible'); }
 
 function submitHITL(answer) {
   if (!answer.trim()) return;
   send({ op: 'publish', topic: '/hitl/human_response', msg: { response: answer.trim() } });
   dismissHITL();
-  pendingHITL = null;
-  document.getElementById('hitl-empty').style.display = '';
-  document.getElementById('hitl-question').style.display = 'none';
-  document.getElementById('hitl-input-row').style.display = 'none';
-  appendFeed('feed-context', `[You → Robot] ${answer.trim()}`);
+  if (hitlQueue.length > 0) hitlQueue.shift();
+  pendingHITL = hitlQueue.length > 0 ? hitlQueue[0].question : null;
+  renderHITLQueue();
+  appendFeed('feed-context', '[You \u2192 Robot] ' + answer.trim());
   setState('Thinking');
 }
 
-document.getElementById('modal-submit').addEventListener('click', () => {
+document.getElementById('modal-submit').addEventListener('click', function() {
   submitHITL(document.getElementById('modal-input').value);
 });
 document.getElementById('modal-dismiss').addEventListener('click', dismissHITL);
-document.getElementById('modal-input').addEventListener('keydown', e => {
+document.getElementById('modal-input').addEventListener('keydown', function(e) {
   if (e.key === 'Enter') submitHITL(e.target.value);
   if (e.key === 'Escape') dismissHITL();
 });
-document.getElementById('hitl-submit').addEventListener('click', () => {
+document.getElementById('hitl-submit').addEventListener('click', function() {
   submitHITL(document.getElementById('hitl-input').value);
   document.getElementById('hitl-input').value = '';
 });
-document.getElementById('hitl-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') {
-    submitHITL(e.target.value);
-    e.target.value = '';
-  }
+document.getElementById('hitl-input').addEventListener('keydown', function(e) {
+  if (e.key === 'Enter') { submitHITL(e.target.value); e.target.value = ''; }
 });
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Sensory Visualizer – render loop
-// ═══════════════════════════════════════════════════════════════════════════
-const sCanvas = document.getElementById('sensor-canvas');
-const sCtx = sCanvas.getContext('2d');
+// =========================================================================
+// Sensory Visualizer - render loop
+// =========================================================================
+var sCanvas = document.getElementById('sensor-canvas');
+var sCtx = sCanvas.getContext('2d');
 
 function resizeSensorCanvas() {
-  const panel = document.getElementById('panel-sensor');
-  const titleH = panel.querySelector('.panel-title').offsetHeight;
-  const infoH = document.getElementById('sensor-info').offsetHeight;
-  const h = panel.clientHeight - titleH - infoH;
+  var panel = document.getElementById('panel-sensor');
+  var titleH = panel.querySelector('.panel-title').offsetHeight;
+  var infoH = document.getElementById('sensor-info').offsetHeight;
   sCanvas.width  = panel.clientWidth;
-  sCanvas.height = Math.max(h, 200);
+  sCanvas.height = Math.max(panel.clientHeight - titleH - infoH, 200);
 }
 
 function renderSensor() {
   resizeSensorCanvas();
-  const w = sCanvas.width, h = sCanvas.height;
-  sCtx.fillStyle = '#0d1117';
-  sCtx.fillRect(0, 0, w, h);
-
-  // Grid
-  sCtx.strokeStyle = '#1a1f27';
-  sCtx.lineWidth = 1;
-  const gridStep = SCALE; // 1 m grid
-  const cx = w / 2 - robotX * SCALE;
-  const cy = h / 2 + robotY * SCALE;
-  for (let gx = ((cx % gridStep) + gridStep) % gridStep; gx < w; gx += gridStep) {
+  var w = sCanvas.width, h = sCanvas.height;
+  sCtx.fillStyle = '#0d1117'; sCtx.fillRect(0, 0, w, h);
+  var gridStep = SCALE;
+  var cx = w / 2 - robotX * SCALE;
+  var cy = h / 2 + robotY * SCALE;
+  sCtx.strokeStyle = '#1a1f27'; sCtx.lineWidth = 1;
+  for (var gx = ((cx % gridStep) + gridStep) % gridStep; gx < w; gx += gridStep) {
     sCtx.beginPath(); sCtx.moveTo(gx, 0); sCtx.lineTo(gx, h); sCtx.stroke();
   }
-  for (let gy = ((cy % gridStep) + gridStep) % gridStep; gy < h; gy += gridStep) {
+  for (var gy = ((cy % gridStep) + gridStep) % gridStep; gy < h; gy += gridStep) {
     sCtx.beginPath(); sCtx.moveTo(0, gy); sCtx.lineTo(w, gy); sCtx.stroke();
   }
-
-  const RX = w / 2, RY = h / 2; // robot always at centre
-
-  // LiDAR points
+  var RX = w / 2, RY = h / 2;
   if (lidarRanges.length > 0) {
     sCtx.fillStyle = '#f8514966';
-    for (let i = 0; i < lidarRanges.length; i++) {
-      const r = lidarRanges[i];
+    for (var i = 0; i < lidarRanges.length; i++) {
+      var r = lidarRanges[i];
       if (!isFinite(r) || r <= 0 || r > 20) continue;
-      const angle = lidarAngleMin + i * lidarAngleIncrement + robotHeading;
-      const px = RX + r * Math.cos(angle) * SCALE;
-      const py = RY - r * Math.sin(angle) * SCALE;
-      sCtx.beginPath();
-      sCtx.arc(px, py, 2, 0, Math.PI * 2);
-      sCtx.fill();
+      var angle = lidarAngleMin + i * lidarAngleIncrement + robotHeading;
+      var px = RX + r * Math.cos(angle) * SCALE;
+      var py = RY - r * Math.sin(angle) * SCALE;
+      sCtx.beginPath(); sCtx.arc(px, py, 2, 0, Math.PI * 2); sCtx.fill();
     }
   }
-
-  // Robot avatar (filled triangle pointing in heading direction)
-  const size = 12;
+  var size = 12;
   sCtx.save();
-  sCtx.translate(RX, RY);
-  sCtx.rotate(-robotHeading);
+  sCtx.translate(RX, RY); sCtx.rotate(-robotHeading);
   sCtx.beginPath();
   sCtx.moveTo(0, -size);
   sCtx.lineTo(size * 0.6, size * 0.6);
   sCtx.lineTo(0, size * 0.3);
   sCtx.lineTo(-size * 0.6, size * 0.6);
   sCtx.closePath();
-  sCtx.fillStyle = '#58a6ff';
-  sCtx.fill();
-  sCtx.strokeStyle = '#fff';
-  sCtx.lineWidth = 1;
-  sCtx.stroke();
+  sCtx.fillStyle = '#58a6ff'; sCtx.fill();
+  sCtx.strokeStyle = '#fff'; sCtx.lineWidth = 1; sCtx.stroke();
   sCtx.restore();
-
-  // Origin dot
-  sCtx.beginPath();
-  sCtx.arc(cx, cy, 3, 0, Math.PI * 2);
-  sCtx.fillStyle = '#3fb95066';
-  sCtx.fill();
+  sCtx.beginPath(); sCtx.arc(cx, cy, 3, 0, Math.PI * 2);
+  sCtx.fillStyle = '#3fb95066'; sCtx.fill();
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// =========================================================================
 // Events/sec metric
-// ═══════════════════════════════════════════════════════════════════════════
-setInterval(() => {
-  epsDisplay = eventCount;
-  eventCount = 0;
+// =========================================================================
+setInterval(function() {
+  epsDisplay = eventCount; eventCount = 0;
   document.getElementById('met-eps').textContent = epsDisplay;
+  setInterlockStatus('memory', epsDisplay > 0 ? 'ok' : 'idle', epsDisplay + ' ev/s');
 }, 1000);
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Animation loop (60 FPS)
-// ═══════════════════════════════════════════════════════════════════════════
-function loop() {
-  renderSensor();
-  drawJoystick();
-  requestAnimationFrame(loop);
+// =========================================================================
+// 3D Spatial View - Three.js
+// =========================================================================
+var threeScene, threeCamera, threeRenderer, threeRobotMesh;
+var threeDragging = false, threeLastMouse = { x: 0, y: 0 };
+var threeSpherical = { theta: 0.4, phi: 1.0, radius: 15 };
+
+function initThreeJS() {
+  if (typeof THREE === 'undefined') {
+    var c = document.getElementById('three-container');
+    c.innerHTML = '<div style="color:var(--red);padding:2rem;font-size:.85rem">' +
+      '&#9888; Three.js could not be loaded. Check your network connection.</div>';
+    return;
+  }
+  threeInitialized = true;
+  var container = document.getElementById('three-container');
+  threeScene = new THREE.Scene();
+  threeScene.background = new THREE.Color(0x050810);
+  threeCamera = new THREE.PerspectiveCamera(60, container.clientWidth / Math.max(container.clientHeight, 1), 0.1, 1000);
+  updateThreeCamera();
+  threeRenderer = new THREE.WebGLRenderer({ antialias: true });
+  threeRenderer.setPixelRatio(window.devicePixelRatio);
+  threeRenderer.setSize(container.clientWidth, container.clientHeight);
+  container.appendChild(threeRenderer.domElement);
+  threeScene.add(new THREE.AmbientLight(0xffffff, 0.5));
+  var dir = new THREE.DirectionalLight(0x58a6ff, 1.0);
+  dir.position.set(5, 10, 5); threeScene.add(dir);
+  threeScene.add(new THREE.GridHelper(30, 30, 0x30363d, 0x21262d));
+  var robotGeo = new THREE.ConeGeometry(0.4, 1.0, 8);
+  var robotMat = new THREE.MeshPhongMaterial({ color: 0x58a6ff, emissive: 0x1a3a5f });
+  threeRobotMesh = new THREE.Mesh(robotGeo, robotMat);
+  threeRobotMesh.position.y = 0.5;
+  threeScene.add(threeRobotMesh);
+  var voxPos = [
+    [3,0.5,2],[4,0.5,2],[3,0.5,3],[5,0.5,1],[-2,0.5,-3],
+    [-3,0.5,-2],[-2,0.5,-2],[2,0.5,-4],[1,0.5,-3],[4,0.5,-1]
+  ];
+  var voxGeo = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+  var voxMat = new THREE.MeshBasicMaterial({ color: 0x3fb950, wireframe: true });
+  voxPos.forEach(function(p) {
+    var v = new THREE.Mesh(voxGeo, voxMat); v.position.set(p[0], p[1], p[2]); threeScene.add(v);
+  });
+  var pathPts = [
+    new THREE.Vector3(0, 0.05, 0), new THREE.Vector3(2, 0.05, -1),
+    new THREE.Vector3(4, 0.05, -2), new THREE.Vector3(5, 0.05, -3),
+    new THREE.Vector3(4, 0.05, -4)
+  ];
+  threeScene.add(new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints(pathPts),
+    new THREE.LineBasicMaterial({ color: 0xd29922 })
+  ));
+  var el = threeRenderer.domElement;
+  el.addEventListener('mousedown', function(e) {
+    threeDragging = true; threeLastMouse = { x: e.clientX, y: e.clientY };
+  });
+  el.addEventListener('mouseup',    function() { threeDragging = false; });
+  el.addEventListener('mouseleave', function() { threeDragging = false; });
+  el.addEventListener('mousemove', function(e) {
+    if (!threeDragging) return;
+    threeSpherical.theta -= (e.clientX - threeLastMouse.x) * 0.01;
+    threeSpherical.phi = Math.max(0.1, Math.min(Math.PI - 0.1,
+      threeSpherical.phi + (e.clientY - threeLastMouse.y) * 0.01));
+    threeLastMouse = { x: e.clientX, y: e.clientY };
+    updateThreeCamera();
+  });
+  el.addEventListener('wheel', function(e) {
+    threeSpherical.radius = Math.max(3, Math.min(50, threeSpherical.radius + e.deltaY * 0.05));
+    updateThreeCamera(); e.preventDefault();
+  }, { passive: false });
+  new ResizeObserver(function() {
+    if (!threeRenderer) return;
+    threeCamera.aspect = container.clientWidth / Math.max(container.clientHeight, 1);
+    threeCamera.updateProjectionMatrix();
+    threeRenderer.setSize(container.clientWidth, container.clientHeight);
+  }).observe(container);
+  threeAnimLoop();
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+function updateThreeCamera() {
+  if (!threeCamera) return;
+  var t = threeSpherical.theta, p = threeSpherical.phi, r = threeSpherical.radius;
+  threeCamera.position.set(r * Math.sin(p) * Math.sin(t), r * Math.cos(p), r * Math.sin(p) * Math.cos(t));
+  threeCamera.lookAt(0, 0, 0);
+}
+
+function threeAnimLoop() {
+  requestAnimationFrame(threeAnimLoop);
+  if (threeRobotMesh) {
+    threeRobotMesh.position.x = robotX;
+    threeRobotMesh.position.z = -robotY;
+    threeRobotMesh.rotation.y = robotHeading;
+  }
+  if (threeRenderer) threeRenderer.render(threeScene, threeCamera);
+}
+
+// =========================================================================
+// Config management
+// =========================================================================
+function loadConfig() {
+  var status = document.getElementById('config-status');
+  status.textContent = 'Loading\u2026';
+  fetch('/api/config').then(function(res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.text();
+  }).then(function(text) {
+    document.getElementById('config-textarea').value = text;
+    status.textContent = 'Loaded.';
+    setTimeout(function() { status.textContent = ''; }, 2000);
+  }).catch(function(e) { status.textContent = 'Error: ' + e.message; });
+}
+
+function saveConfig() {
+  var status = document.getElementById('config-status');
+  status.textContent = 'Saving\u2026';
+  fetch('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: document.getElementById('config-textarea').value
+  }).then(function(res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    status.textContent = 'Saved.';
+    setTimeout(function() { status.textContent = ''; }, 2000);
+  }).catch(function(e) { status.textContent = 'Error: ' + e.message; });
+}
+
+document.getElementById('btn-config-reload').addEventListener('click', loadConfig);
+document.getElementById('btn-config-save').addEventListener('click', saveConfig);
+
+// =========================================================================
+// Ollama model tester
+// =========================================================================
+document.getElementById('btn-ollama-test').addEventListener('click', function() {
+  var url    = document.getElementById('ollama-url').value.trim();
+  var status = document.getElementById('ollama-status');
+  var list   = document.getElementById('model-list');
+  status.textContent = 'Testing\u2026';
+  list.innerHTML = '';
+  fetch(url + '/api/tags').then(function(res) {
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.json();
+  }).then(function(data) {
+    var models = data.models || [];
+    status.textContent = models.length + ' model(s) available.';
+    if (models.length === 0) {
+      list.innerHTML = '<div style="font-size:.75rem;color:var(--text-dim)">No models found.</div>';
+    } else {
+      models.forEach(function(m) {
+        var div = document.createElement('div');
+        div.className = 'model-item';
+        var sizeGB = m.size ? (m.size / 1e9).toFixed(1) + ' GB' : '\u2014';
+        div.innerHTML = '<div class="model-name">' + escHtml(m.name) + '</div>' +
+                        '<div class="model-size">' + sizeGB + '</div>';
+        list.appendChild(div);
+      });
+    }
+  }).catch(function(e) { status.textContent = 'Error: ' + e.message; });
+});
+
+// =========================================================================
+// Animation loop (60 FPS)
+// =========================================================================
+function loop() { renderSensor(); drawJoystick(); requestAnimationFrame(loop); }
+
+// =========================================================================
 // Boot
-// ═══════════════════════════════════════════════════════════════════════════
+// =========================================================================
 connect();
 loop();
 </script>
