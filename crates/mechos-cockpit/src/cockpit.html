@@ -1041,7 +1041,8 @@ function initThreeJS() {
   if (typeof THREE === 'undefined') {
     var c = document.getElementById('three-container');
     c.innerHTML = '<div style="color:var(--red);padding:2rem;font-size:.85rem">' +
-      '&#9888; Three.js could not be loaded. Check your network connection.</div>';
+      '&#9888; Three.js library failed to load. The 3D view is unavailable. ' +
+      'Possible causes: CDN blocked, network error, or Content Security Policy restriction.</div>';
     return;
   }
   threeInitialized = true;

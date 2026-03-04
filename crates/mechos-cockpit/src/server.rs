@@ -149,18 +149,30 @@ async fn handle_connection(
 
 async fn serve_config_get(mut stream: TcpStream) -> Result<(), MechError> {
     let path = mechos_config_path();
-    let body = tokio::fs::read_to_string(&path).await.unwrap_or_default();
-    let response = format!(
-        "HTTP/1.1 200 OK\r\n\
-         Content-Type: text/plain; charset=utf-8\r\n\
-         Access-Control-Allow-Origin: *\r\n\
-         Content-Length: {}\r\n\
-         Connection: close\r\n\
-         \r\n\
-         {}",
-        body.len(),
-        body
-    );
+    let response = match tokio::fs::read_to_string(&path).await {
+        Ok(body) => format!(
+            "HTTP/1.1 200 OK\r\n\
+             Content-Type: text/plain; charset=utf-8\r\n\
+             Access-Control-Allow-Origin: *\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\
+             \r\n\
+             {}",
+            body.len(),
+            body
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            format!(
+                "HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                msg.len(),
+                msg
+            )
+        }
+    };
     stream
         .write_all(response.as_bytes())
         .await

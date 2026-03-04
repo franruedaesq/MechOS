@@ -827,7 +827,7 @@ fn cmd_memory(args: &str, state: &ReplState) {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
-            .expect("failed to create tokio runtime");
+            .unwrap_or_else(|e| panic!("failed to create tokio runtime: {e}"));
         rt.block_on(store_clone.all_entries())
     })
     .join()
