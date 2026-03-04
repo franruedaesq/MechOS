@@ -12,7 +12,7 @@ use futures_util::{SinkExt, StreamExt};
 use mechos_middleware::EventBus;
 use mechos_types::{Event, EventPayload, MechError};
 use serde_json::Value;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{error, info, warn};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async_with_config, tungstenite::{Message, protocol::WebSocketConfig}};
@@ -120,21 +120,137 @@ async fn handle_connection(
     // Peek at the first bytes of the request to decide whether to upgrade
     // to WebSocket or serve the static HTML.  `peek` does not consume the
     // data, so tungstenite's handshaker sees the full HTTP request.
-    let mut buf = [0u8; 1024];
+    let mut buf = [0u8; 2048];
     let n = stream.peek(&mut buf).await.map_err(|e| {
         MechError::Serialization(format!("peek error from {peer}: {e}"))
     })?;
 
     let header_preview = String::from_utf8_lossy(&buf[..n]);
+    let first_line = header_preview.lines().next().unwrap_or("");
+
     let is_ws_upgrade = header_preview
         .lines()
         .any(|line| line.to_lowercase().starts_with("upgrade:") && line.to_lowercase().contains("websocket"));
 
     if is_ws_upgrade {
         handle_ws(stream, peer, bus).await
+    } else if first_line.starts_with("GET /api/config") {
+        serve_config_get(stream).await
+    } else if first_line.starts_with("POST /api/config") {
+        serve_config_post(stream).await
     } else {
         serve_html(stream).await
     }
+}
+
+// ---------------------------------------------------------------------------
+// Config GET – return ~/.mechos/config.toml as raw text
+// ---------------------------------------------------------------------------
+
+async fn serve_config_get(mut stream: TcpStream) -> Result<(), MechError> {
+    let path = mechos_config_path();
+    let response = match tokio::fs::read_to_string(&path).await {
+        Ok(body) => format!(
+            "HTTP/1.1 200 OK\r\n\
+             Content-Type: text/plain; charset=utf-8\r\n\
+             Access-Control-Allow-Origin: *\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\
+             \r\n\
+             {}",
+            body.len(),
+            body
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+        }
+        Err(e) => {
+            let msg = e.to_string();
+            format!(
+                "HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                msg.len(),
+                msg
+            )
+        }
+    };
+    stream
+        .write_all(response.as_bytes())
+        .await
+        .map_err(|e| MechError::Serialization(format!("HTTP write error: {e}")))?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Config POST – write the request body to ~/.mechos/config.toml
+// ---------------------------------------------------------------------------
+
+async fn serve_config_post(mut stream: TcpStream) -> Result<(), MechError> {
+    // Read the full HTTP request (header + body).
+    let mut raw = Vec::new();
+    let mut tmp = [0u8; 4096];
+    // Read up to MAX_UPSTREAM_MSG_BYTES of the request.
+    loop {
+        match stream.read(&mut tmp).await {
+            Ok(0) => break,
+            Ok(n) => {
+                raw.extend_from_slice(&tmp[..n]);
+                if raw.len() >= MAX_UPSTREAM_MSG_BYTES {
+                    break;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+
+    let text = String::from_utf8_lossy(&raw);
+    // Split header from body at the blank line.
+    let body = if let Some(idx) = text.find("\r\n\r\n") {
+        text[idx + 4..].to_string()
+    } else if let Some(idx) = text.find("\n\n") {
+        text[idx + 2..].to_string()
+    } else {
+        String::new()
+    };
+
+    let response = if body.trim().is_empty() {
+        "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+    } else {
+        // Validate that the body is valid TOML before writing.
+        if toml::de::from_str::<toml::Value>(&body).is_err() {
+            "HTTP/1.1 422 Unprocessable Entity\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_string()
+        } else {
+            let path = mechos_config_path();
+            if let Some(parent) = path.parent() {
+                let _ = tokio::fs::create_dir_all(parent).await;
+            }
+            match tokio::fs::write(&path, body.as_bytes()).await {
+                Ok(()) => {
+                    "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
+                        .to_string()
+                }
+                Err(e) => format!(
+                    "HTTP/1.1 500 Internal Server Error\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    e.to_string().len(),
+                    e
+                ),
+            }
+        }
+    };
+
+    stream
+        .write_all(response.as_bytes())
+        .await
+        .map_err(|e| MechError::Serialization(format!("HTTP write error: {e}")))?;
+    Ok(())
+}
+
+/// Returns the canonical path to the MechOS configuration file.
+fn mechos_config_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    std::path::PathBuf::from(home).join(".mechos").join("config.toml")
 }
 
 // ---------------------------------------------------------------------------
